@@ -650,6 +650,8 @@ struct arch *arch)
 		    }
 #endif /* HACK_TO_MATCH_TEST_CASE */
 		}
+		else if(strcmp(sg->segname, "__DATA_CONST") == 0)
+		    nscns++;
 		else if(strcmp(sg->segname, SEG_IMPORT) == 0){
 #ifndef HACK_TO_MATCH_TEST_CASE
 		    nscns++;
@@ -861,6 +863,19 @@ struct arch *arch)
 		    }
 #endif /* HACK_TO_MATCH_TEST_CASE */
 		}
+		else if(strcmp(sg->segname, "__DATA_CONST") == 0){
+		    strcpy(scnhdrs[j].s_name, ".rdata");
+		    scnhdrs[j].s_vsize = sg->vmsize;
+		    scnhdrs[j].s_vaddr = sg->vmaddr;
+		    scnhdrs[j].s_size = rnd32(sg->filesize, file_alignment);
+		    scnhdrs[j].s_relptr = 0;
+		    scnhdrs[j].s_lnnoptr = 0;
+		    scnhdrs[j].s_nlnno = 0;
+		    scnhdrs[j].s_flags = IMAGE_SCN_MEM_READ |
+				         IMAGE_SCN_CNT_INITIALIZED_DATA;
+		    scn_contents[j] = object_addr + sg->fileoff;
+		    j++;
+		}
 		else if(strcmp(sg->segname, SEG_IMPORT) == 0){
 #ifndef HACK_TO_MATCH_TEST_CASE
 		    strcpy(scnhdrs[j].s_name, ".import");
@@ -1005,6 +1020,8 @@ struct arch *arch)
 		if(strcmp(sg64->segname, SEG_TEXT) == 0)
 		    nscns++;
 		else if(strcmp(sg64->segname, SEG_DATA) == 0)
+		    nscns++;
+		else if(strcmp(sg64->segname, "__DATA_CONST") == 0)
 		    nscns++;
 		else if(strcmp(sg64->segname, SEG_LINKEDIT) != 0){
 		    fatal("input file: %s contains Mach-O segment %.16s "
@@ -1173,6 +1190,20 @@ struct arch *arch)
 		    scnhdrs[j].s_flags = IMAGE_SCN_MEM_READ |
 					 IMAGE_SCN_MEM_WRITE |
 					 IMAGE_SCN_CNT_INITIALIZED_DATA;
+		    scn_contents[j] = object_addr + sg64->fileoff;
+		    j++;
+		}
+		else if(strcmp(sg64->segname, "__DATA_CONST") == 0){
+		    strcpy(scnhdrs[j].s_name, ".rdata");
+		    scnhdrs[j].s_vsize = (uint32_t)sg64->vmsize;
+		    scnhdrs[j].s_vaddr = (uint32_t)sg64->vmaddr;
+		    scnhdrs[j].s_size = (uint32_t)rnd64(sg64->filesize,
+							file_alignment);
+		    scnhdrs[j].s_relptr = 0;
+		    scnhdrs[j].s_lnnoptr = 0;
+		    scnhdrs[j].s_nlnno = 0;
+		    scnhdrs[j].s_flags = IMAGE_SCN_MEM_READ |
+				         IMAGE_SCN_CNT_INITIALIZED_DATA;
 		    scn_contents[j] = object_addr + sg64->fileoff;
 		    j++;
 		}
