@@ -405,6 +405,10 @@ char **envp)
 		}
 		i++;
 	    }
+	    else if(strcmp(argv[i], "--version") == 0){
+	    	printf("1.0.0\n");
+	    	exit(0);
+	    }
 	    else if(input == NULL)
 		input = argv[i];
 	    else if(output == NULL)
