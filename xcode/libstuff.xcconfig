@@ -15,7 +15,7 @@ HEADER_SEARCH_PATHS = ${inherited} ${DT_TOOLCHAIN_DIR}/usr/local/include
 // libstuff currently requires the LTO_SUPPORT macro to be defined in order to
 // compile support for LTO. This is built non-conditionally, and can probably
 // be factored out of the source code at some future point.
-LIBSTUFF_C_FLAGS_LTO = -DLTO_SUPPORT
+// LIBSTUFF_C_FLAGS_LTO = -DLTO_SUPPORT
 
 // libstuff builds an "apple_version.c" file that stamps the current project
 // version into the archive. Various cctools commands will print this version
