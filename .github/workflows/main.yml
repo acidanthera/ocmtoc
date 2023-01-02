@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - run: xcodebuild -scheme mtoc -jobs 1 -arch x86_64 -arch arm64 -configuration Debug CONFIGURATION_BUILD_DIR=build/Debug
+      - run: xcodebuild -scheme mtoc -jobs 1 -arch x86_64 -arch arm64 -configuration Release CONFIGURATION_BUILD_DIR=build/Release
+      - run: cd build/Debug && zip -qry ocmtoc-$(./mtoc --version)-DEBUG.zip mtoc
+      - run: cd build/Release && zip -qry ocmtoc-$(./mtoc --version)-RELEASE.zip mtoc
+
+      - name: Upload to Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: Artifacts
+          path: build/*/*.zip
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: build/*/*.zip
+          tag: ${{ github.ref }}
+          file_glob: true
