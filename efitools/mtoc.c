@@ -821,9 +821,7 @@ struct arch *arch)
 		    scnhdrs[j].s_nlnno = 0;
 		    scnhdrs[j].s_flags = IMAGE_SCN_MEM_READ |
 					 IMAGE_SCN_MEM_WRITE |
-					 IMAGE_SCN_CNT_CODE |
-				         IMAGE_SCN_CNT_INITIALIZED_DATA |
-					 IMAGE_SCN_MEM_EXECUTE;
+					 IMAGE_SCN_CNT_INITIALIZED_DATA;
 		    scn_contents[j] = object_addr + sg->fileoff;
 		    j++;
 #ifdef HACK_TO_MATCH_TEST_CASE
@@ -1168,9 +1166,7 @@ struct arch *arch)
 		    scnhdrs[j].s_nlnno = 0;
 		    scnhdrs[j].s_flags = IMAGE_SCN_MEM_READ |
 					 IMAGE_SCN_MEM_WRITE |
-					 IMAGE_SCN_CNT_CODE |
-				         IMAGE_SCN_CNT_INITIALIZED_DATA |
-					 IMAGE_SCN_MEM_EXECUTE;
+					 IMAGE_SCN_CNT_INITIALIZED_DATA;
 		    scn_contents[j] = object_addr + sg64->fileoff;
 		    j++;
 		}
