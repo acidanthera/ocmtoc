@@ -590,6 +590,8 @@ struct arch *arch)
     uint32_t i, j, reloc_addr, debug_addr;
     struct load_command *lc;
     struct segment_command *sg;
+    enum bool reloc_fix_exists;
+    uint32_t min_seg_vmaddr, reloc_fix_vmaddr;
     struct thread_command *ut;
     char *p, *state;
     uint32_t flavor, count;
@@ -626,10 +628,16 @@ struct arch *arch)
 	 */
 	nscns = 0;
 	reloc_addr = 0;
+	reloc_fix_exists = FALSE;
+	min_seg_vmaddr = 0xFFFFFFFF;
+	reloc_fix_vmaddr = 0xFFFFFFFF;
 	lc = arch->object->load_commands;
 	for(i = 0; i < arch->object->mh->ncmds; i++){
 	    if(lc->cmd == LC_SEGMENT){
 		sg = (struct segment_command *)lc;
+		if (sg->vmaddr < min_seg_vmaddr){
+		  min_seg_vmaddr = sg->vmaddr;
+		}
 		if(strcmp(sg->segname, SEG_LINKEDIT) != 0 &&
 		   sg->vmaddr + sg->vmsize > reloc_addr)
 		    reloc_addr = sg->vmaddr + sg->vmsize;
@@ -653,6 +661,27 @@ struct arch *arch)
 				  s->segname, s->sectname);
 		    }
 #endif /* HACK_TO_MATCH_TEST_CASE */
+		}
+		else if(strcmp(sg->segname, "__RELOC_FIX") == 0){
+		  /*
+		   * The __RELOC_FIX segment is an empty r/w marker to force
+		   * relocations to be relative to the image base. For PE files,
+		   * we can safely allow relocations targeting read-only segments.
+		   */
+		  if(sg->vmsize != 0){
+		    fatal("input file: %s contains Mach-O segment "
+		    "__RELOC_FIX with non-zero vmsize",
+		    arch->file_name);
+		  }
+
+		  if(sg->filesize != 0){
+		    fatal("input file: %s contains Mach-O segment "
+		    "__RELOC_FIX with non-zero filesize",
+		    arch->file_name);
+		  }
+
+		  reloc_fix_exists = TRUE;
+		  reloc_fix_vmaddr = sg->vmaddr;
 		}
 		else if(strcmp(sg->segname, "__DATA_CONST") == 0)
 		    nscns++;
@@ -739,6 +768,11 @@ struct arch *arch)
 		}
 	    }
 	    lc = (struct load_command *)((char *)lc + lc->cmdsize);
+	}
+	if(reloc_fix_exists && min_seg_vmaddr != reloc_fix_vmaddr){
+	  fatal("input file: %s contains Mach-O segment "
+	  "__RELOC_FIX with non-minimal vmaddr",
+	  arch->file_name);
 	}
 	if(reloc_size != 0){
 	    /* add one for the .reloc section to contain the base relocations */
@@ -867,6 +901,11 @@ struct arch *arch)
 		    }
 #endif /* HACK_TO_MATCH_TEST_CASE */
 		}
+		else if(strcmp(sg->segname, "__RELOC_FIX") == 0){
+		  /*
+		   * Skip marker segment.
+		   */
+		}
 		else if(strcmp(sg->segname, "__DATA_CONST") == 0){
 		    strcpy(scnhdrs[j].s_name, ".rdata");
 		    scnhdrs[j].s_vsize = sg->vmsize;
@@ -980,6 +1019,8 @@ struct arch *arch)
     uint64_t reloc_addr, debug_addr;
     struct load_command *lc;
     struct segment_command_64 *sg64;
+    enum bool reloc_fix_exists;
+    uint64_t min_seg_vmaddr, reloc_fix_vmaddr;
     struct thread_command *ut;
     char *p, *state;
     uint32_t flavor, count;
@@ -1013,10 +1054,16 @@ struct arch *arch)
 	 */
 	nscns = 0;
 	reloc_addr = 0;
+	reloc_fix_exists = FALSE;
+	min_seg_vmaddr = 0xFFFFFFFFFFFFFFFF;
+	reloc_fix_vmaddr = 0xFFFFFFFFFFFFFFFF;
 	lc = arch->object->load_commands;
 	for(i = 0; i < arch->object->mh64->ncmds; i++){
 	    if(lc->cmd == LC_SEGMENT_64){
 		sg64 = (struct segment_command_64 *)lc;
+		if (sg64->vmaddr < min_seg_vmaddr){
+		  min_seg_vmaddr = sg64->vmaddr;
+		}
 #ifndef HACK_TO_MATCH_TEST_CASE
 		if(strcmp(sg64->segname, SEG_LINKEDIT) != 0 &&
 		   sg64->vmaddr + sg64->vmsize > reloc_addr)
@@ -1025,6 +1072,27 @@ struct arch *arch)
 		    nscns++;
 		else if(strcmp(sg64->segname, SEG_DATA) == 0)
 		    nscns++;
+		else if(strcmp(sg64->segname, "__RELOC_FIX") == 0){
+		  /*
+		   * The __RELOC_FIX segment is an empty r/w marker to force
+		   * relocations to be relative to the image base. For PE files,
+		   * we can safely allow relocations targeting read-only segments.
+		   */
+		  if(sg64->vmsize != 0){
+		    fatal("input file: %s contains Mach-O segment "
+		    "__RELOC_FIX with non-zero vmsize",
+		    arch->file_name);
+		  }
+
+		  if(sg64->filesize != 0){
+		    fatal("input file: %s contains Mach-O segment "
+		    "__RELOC_FIX with non-zero filesize",
+		    arch->file_name);
+		  }
+
+		  reloc_fix_exists = TRUE;
+		  reloc_fix_vmaddr = sg64->vmaddr;
+		}
 		else if(strcmp(sg64->segname, "__DATA_CONST") == 0)
 		    nscns++;
 		else if(strcmp(sg64->segname, SEG_LINKEDIT) != 0){
@@ -1104,6 +1172,11 @@ struct arch *arch)
 		}
 	    }
 	    lc = (struct load_command *)((char *)lc + lc->cmdsize);
+	}
+	if(reloc_fix_exists && min_seg_vmaddr != reloc_fix_vmaddr){
+	  fatal("input file: %s contains Mach-O segment "
+	  "__RELOC_FIX with non-minimal vmaddr",
+	  arch->file_name);
 	}
 	if(reloc_size != 0){
 	    /* add one for the .reloc section to contain the base relocations */
@@ -1196,6 +1269,11 @@ struct arch *arch)
 					 IMAGE_SCN_CNT_INITIALIZED_DATA;
 		    scn_contents[j] = object_addr + sg64->fileoff;
 		    j++;
+		}
+		else if(strcmp(sg64->segname, "__RELOC_FIX") == 0){
+		  /*
+		   * Skip marker segment.
+		   */
 		}
 		else if(strcmp(sg64->segname, "__DATA_CONST") == 0){
 		    strcpy(scnhdrs[j].s_name, ".rdata");
