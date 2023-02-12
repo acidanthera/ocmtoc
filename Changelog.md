@@ -4,6 +4,7 @@ ocmtoc changelog
 #### v1.0.2
 - Mark `.reloc` and `.debug` as NX
 - Added `-require_read_only_relocs` argument
+- Renamed `__RELOC_FIX` to `__RO_RELOCS`
 
 #### v1.0.1
 - Added support for the `__RELOC_FIX` marker segment

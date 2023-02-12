@@ -672,21 +672,21 @@ struct arch *arch)
 		    }
 #endif /* HACK_TO_MATCH_TEST_CASE */
 		}
-		else if(strcmp(sg->segname, "__RELOC_FIX") == 0){
+		else if(strcmp(sg->segname, "__RO_RELOCS") == 0){
 		  /*
-		   * The __RELOC_FIX segment is an empty r/w marker to force
+		   * The __RO_RELOCS segment is an empty r/w marker to force
 		   * relocations to be relative to the image base. For PE files,
 		   * we can safely allow relocations targeting read-only segments.
 		   */
 		  if(sg->vmsize != 0){
 		    fatal("input file: %s contains Mach-O segment "
-		    "__RELOC_FIX with non-zero vmsize",
+		    "__RO_RELOCS with non-zero vmsize",
 		    arch->file_name);
 		  }
 
 		  if(sg->filesize != 0){
 		    fatal("input file: %s contains Mach-O segment "
-		    "__RELOC_FIX with non-zero filesize",
+		    "__RO_RELOCS with non-zero filesize",
 		    arch->file_name);
 		  }
 
@@ -782,12 +782,12 @@ struct arch *arch)
 	if(reloc_fix_exists){
 	  if(min_seg_vmaddr != reloc_fix_vmaddr){
 	    fatal("input file: %s contains Mach-O segment "
-	    "__RELOC_FIX with non-minimal vmaddr",
+	    "__RO_RELOCS with non-minimal vmaddr",
 	    arch->file_name);
 	  }
 	} else if(require_read_only_relocs){
 	  fatal("input file: %s does not contain Mach-O segment "
-	  "__RELOC_FIX despite specifying -require_read_only_relocs",
+	  "__RO_RELOCS despite specifying -require_read_only_relocs",
 	  arch->file_name);
 	}
 	if(reloc_size != 0){
@@ -917,7 +917,7 @@ struct arch *arch)
 		    }
 #endif /* HACK_TO_MATCH_TEST_CASE */
 		}
-		else if(strcmp(sg->segname, "__RELOC_FIX") == 0){
+		else if(strcmp(sg->segname, "__RO_RELOCS") == 0){
 		  /*
 		   * Skip marker segment.
 		   */
@@ -1088,21 +1088,21 @@ struct arch *arch)
 		    nscns++;
 		else if(strcmp(sg64->segname, SEG_DATA) == 0)
 		    nscns++;
-		else if(strcmp(sg64->segname, "__RELOC_FIX") == 0){
+		else if(strcmp(sg64->segname, "__RO_RELOCS") == 0){
 		  /*
-		   * The __RELOC_FIX segment is an empty r/w marker to force
+		   * The __RO_RELOCS segment is an empty r/w marker to force
 		   * relocations to be relative to the image base. For PE files,
 		   * we can safely allow relocations targeting read-only segments.
 		   */
 		  if(sg64->vmsize != 0){
 		    fatal("input file: %s contains Mach-O segment "
-		    "__RELOC_FIX with non-zero vmsize",
+		    "__RO_RELOCS with non-zero vmsize",
 		    arch->file_name);
 		  }
 
 		  if(sg64->filesize != 0){
 		    fatal("input file: %s contains Mach-O segment "
-		    "__RELOC_FIX with non-zero filesize",
+		    "__RO_RELOCS with non-zero filesize",
 		    arch->file_name);
 		  }
 
@@ -1192,12 +1192,12 @@ struct arch *arch)
 	if(reloc_fix_exists){
 	  if(min_seg_vmaddr != reloc_fix_vmaddr){
 	    fatal("input file: %s contains Mach-O segment "
-	    "__RELOC_FIX with non-minimal vmaddr",
+	    "__RO_RELOCS with non-minimal vmaddr",
 	    arch->file_name);
 	  }
 	} else if(require_read_only_relocs){
 	  fatal("input file: %s does not contain Mach-O segment "
-	  "__RELOC_FIX despite specifying -require_read_only_relocs",
+	  "__RO_RELOCS despite specifying -require_read_only_relocs",
 	  arch->file_name);
 	}
 	if(reloc_size != 0){
@@ -1292,7 +1292,7 @@ struct arch *arch)
 		    scn_contents[j] = object_addr + sg64->fileoff;
 		    j++;
 		}
-		else if(strcmp(sg64->segname, "__RELOC_FIX") == 0){
+		else if(strcmp(sg64->segname, "__RO_RELOCS") == 0){
 		  /*
 		   * Skip marker segment.
 		   */
