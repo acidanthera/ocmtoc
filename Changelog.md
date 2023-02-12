@@ -1,6 +1,9 @@
 ocmtoc changelog
 ================
 
+#### v1.0.2
+- Mark `.reloc` and `.debug` as NX
+
 #### v1.0.1
 - Added support for the `__RELOC_FIX` marker segment
 

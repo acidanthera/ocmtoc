@@ -406,7 +406,7 @@ char **envp)
 		i++;
 	    }
 	    else if(strcmp(argv[i], "--version") == 0){
-	    	printf("1.0.1\n");
+	    	printf("1.0.2\n");
 	    	exit(0);
 	    }
 	    else if(input == NULL)
@@ -1333,9 +1333,7 @@ struct arch *arch)
 	    scnhdrs[j].s_nlnno = 0;
 	    scnhdrs[j].s_flags = IMAGE_SCN_MEM_READ |
 				 IMAGE_SCN_CNT_INITIALIZED_DATA |
-				 IMAGE_SCN_MEM_DISCARDABLE |
-				 IMAGE_SCN_CNT_CODE |
-				 IMAGE_SCN_MEM_EXECUTE;
+				 IMAGE_SCN_MEM_DISCARDABLE;
 	    reloc_scnhdr = scnhdrs + j;
 	    scn_contents[j] = reloc_contents;
 	    j++;
@@ -1355,9 +1353,7 @@ struct arch *arch)
 	    scnhdrs[j].s_nlnno = 0;
 	    scnhdrs[j].s_flags = IMAGE_SCN_MEM_READ |
 				 IMAGE_SCN_CNT_INITIALIZED_DATA |
-				 IMAGE_SCN_MEM_DISCARDABLE |
-				 IMAGE_SCN_CNT_CODE |
-				 IMAGE_SCN_MEM_EXECUTE;
+				 IMAGE_SCN_MEM_DISCARDABLE;
 	    debug_scnhdr = scnhdrs + j;
 	    scn_contents[j] = debug_contents;
 	    j++;
