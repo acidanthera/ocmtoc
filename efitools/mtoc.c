@@ -161,6 +161,12 @@ char *debug_uuid = NULL;
  */
 char *entry_point = NULL;
 
+/*
+ * Whether to error when relocations targeting read-only segments are not
+ * supported.
+ */
+enum bool require_read_only_relocs = FALSE;
+
 #ifdef HACK_TO_MATCH_TEST_CASE
 /*
  * These are are used for the HACK to get the symbol table for 32-bit files to
@@ -405,6 +411,9 @@ char **envp)
 		}
 		i++;
 	    }
+	    else if(strcmp(argv[i], "-require_read_only_relocs") == 0){
+	    	require_read_only_relocs = TRUE;
+	    }
 	    else if(strcmp(argv[i], "--version") == 0){
 	    	printf("1.0.2\n");
 	    	exit(0);
@@ -466,7 +475,8 @@ void)
 	fprintf(stderr, "Usage: %s [-subsystem type] "
 		"[-section_alignment hexvalue] [-align hexvalue] "
 		"[-version major.minor] [-ddebug_filename] "
-		"[-u debug_guid] input_Mach-O output_pecoff\n", progname);
+		"[-u debug_guid] [-require_read_only_relocs] "
+		"input_Mach-O output_pecoff\n", progname);
 	exit(EXIT_FAILURE);
 }
 
@@ -769,9 +779,15 @@ struct arch *arch)
 	    }
 	    lc = (struct load_command *)((char *)lc + lc->cmdsize);
 	}
-	if(reloc_fix_exists && min_seg_vmaddr != reloc_fix_vmaddr){
-	  fatal("input file: %s contains Mach-O segment "
-	  "__RELOC_FIX with non-minimal vmaddr",
+	if(reloc_fix_exists){
+	  if(min_seg_vmaddr != reloc_fix_vmaddr){
+	    fatal("input file: %s contains Mach-O segment "
+	    "__RELOC_FIX with non-minimal vmaddr",
+	    arch->file_name);
+	  }
+	} else if(require_read_only_relocs){
+	  fatal("input file: %s does not contain Mach-O segment "
+	  "__RELOC_FIX despite specifying -require_read_only_relocs",
 	  arch->file_name);
 	}
 	if(reloc_size != 0){
@@ -1173,9 +1189,15 @@ struct arch *arch)
 	    }
 	    lc = (struct load_command *)((char *)lc + lc->cmdsize);
 	}
-	if(reloc_fix_exists && min_seg_vmaddr != reloc_fix_vmaddr){
-	  fatal("input file: %s contains Mach-O segment "
-	  "__RELOC_FIX with non-minimal vmaddr",
+	if(reloc_fix_exists){
+	  if(min_seg_vmaddr != reloc_fix_vmaddr){
+	    fatal("input file: %s contains Mach-O segment "
+	    "__RELOC_FIX with non-minimal vmaddr",
+	    arch->file_name);
+	  }
+	} else if(require_read_only_relocs){
+	  fatal("input file: %s does not contain Mach-O segment "
+	  "__RELOC_FIX despite specifying -require_read_only_relocs",
 	  arch->file_name);
 	}
 	if(reloc_size != 0){
