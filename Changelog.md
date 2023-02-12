@@ -1,6 +1,9 @@
 ocmtoc changelog
 ================
 
+#### v1.0.3
+- Verify `__RO_RELOCS` protection level
+
 #### v1.0.2
 - Mark `.reloc` and `.debug` as NX
 - Added `-require_read_only_relocs` argument

@@ -415,7 +415,7 @@ char **envp)
 	    	require_read_only_relocs = TRUE;
 	    }
 	    else if(strcmp(argv[i], "--version") == 0){
-	    	printf("1.0.2\n");
+	    	printf("1.0.3\n");
 	    	exit(0);
 	    }
 	    else if(input == NULL)
@@ -687,6 +687,12 @@ struct arch *arch)
 		  if(sg->filesize != 0){
 		    fatal("input file: %s contains Mach-O segment "
 		    "__RO_RELOCS with non-zero filesize",
+		    arch->file_name);
+		  }
+
+		  if(sg->initprot != (VM_PROT_READ | VM_PROT_WRITE)){
+		    fatal("input file: %s contains Mach-O segment "
+		    "__RO_RELOCS with incorrect protection level",
 		    arch->file_name);
 		  }
 
@@ -1103,6 +1109,12 @@ struct arch *arch)
 		  if(sg64->filesize != 0){
 		    fatal("input file: %s contains Mach-O segment "
 		    "__RO_RELOCS with non-zero filesize",
+		    arch->file_name);
+		  }
+
+		  if(sg64->initprot != (VM_PROT_READ | VM_PROT_WRITE)){
+		    fatal("input file: %s contains Mach-O segment "
+		    "__RO_RELOCS with incorrect protection level",
 		    arch->file_name);
 		  }
 
