@@ -3,6 +3,7 @@ ocmtoc changelog
 
 #### v1.0.3
 - Verify `__RO_RELOCS` protection level
+- Fixed DebugDirectoryEntry size
 
 #### v1.0.2
 - Mark `.reloc` and `.debug` as NX

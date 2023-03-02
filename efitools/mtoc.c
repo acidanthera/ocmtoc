@@ -1627,7 +1627,7 @@ struct ofile *ofile)
 	    /*  Entry 6, Debug Directory [.debug] address & size */
 	    if(debug_filename != NULL){
 		aouthdr.DataDirectory[6][0] = debug_scnhdr->s_vaddr;
-		aouthdr.DataDirectory[6][1] = debug_scnhdr->s_vsize;
+		aouthdr.DataDirectory[6][1] = sizeof(struct debug_directory_entry);
 	    }
 	}
 	else{
@@ -1712,7 +1712,7 @@ struct ofile *ofile)
 	    /*  Entry 6, Debug Directory [.debug] address & size */
 	    if(debug_filename != NULL){
 		aouthdr64.DataDirectory[6][0] = debug_scnhdr->s_vaddr;
-		aouthdr64.DataDirectory[6][1] = debug_scnhdr->s_vsize;
+		aouthdr64.DataDirectory[6][1] = sizeof(struct debug_directory_entry);
 	    }
 	}
 
