@@ -26,6 +26,9 @@
 
 #import "stuff/ofile.h"
 
+#ifdef CODEDIRECTORY_SUPPORT
+#import "stuff/code_directory.h"
+#endif /* CODEDIRECTORY_SUPPORT */
 /*
  * This is used to build the table of contents of an archive.  Each toc_entry
  * Contains a pointer to a symbol name that is defined by a member of the
@@ -103,6 +106,18 @@ struct arch {
 struct member {
     enum ofile_type type;	/* the type of this member can be OFILE_Mach_O*/
 				/*  OFILE_LLVM_BITCODE or OFILE_UNKNOWN */
+
+    /*
+     * Ordinarily, 'struct member' member pointers point into memory owned
+     * by the enclosing 'struct arch's 'struct object' pointer. (Say that
+     * ten times fast!) If the member represents an object file that is not
+     * properly architecture-aligned within the library archive, the object
+     * file will be copied into newly allocated memory, which will be pointer
+     * aligned. In this case, 'buffer' points at this memory, and the other
+     * member pointers will point into 'buffer' instead of the archive file.
+     */
+    char* buffer;
+
     struct ar_hdr *ar_hdr;	/* the archive header for this member */
     uint64_t offset;		/* current working offset and final offset */
 				/*  use in creating the table of contents */
@@ -168,6 +183,8 @@ struct object {
     struct linkedit_data_command
 	*data_in_code_cmd;	    /* the data in code load command, if any */
     struct linkedit_data_command
+    *atom_info_cmd;   /* the atom info load command, if any*/
+    struct linkedit_data_command
 	*code_sign_drs_cmd;	    /* the code signing DRs command, if any */
     struct linkedit_data_command
 	*link_opt_hint_cmd;	    /* the linker optimization hint command,
@@ -180,6 +197,10 @@ struct object {
 	*dyld_exports_trie;	    /* the exports trie */
     struct linkedit_data_command
 	*dyld_chained_fixups;	    /* the fixups */
+    struct linkedit_data_command
+        *function_variants;         /* the function variants table */
+    struct linkedit_data_command
+        *function_variant_fixups;   /* the internal uses of function variants */
     struct encryption_info_command
 	*encryption_info_command;   /* LC_ENCRYPTION_INFO */
     struct encryption_info_command_64
@@ -233,6 +254,8 @@ struct object {
     uint32_t      output_func_start_info_data_size;
     char *output_data_in_code_info_data;
     uint32_t      output_data_in_code_info_data_size;
+    char *output_atom_info_data;
+    uint32_t      output_atom_info_data_size;
     char *output_code_sign_drs_info_data;
     uint32_t      output_code_sign_drs_info_data_size;
     char *output_link_opt_hint_info_data;
@@ -241,6 +264,10 @@ struct object {
     uint32_t      output_dyld_chained_fixups_data_size;
     char *output_dyld_exports_trie_data;
     uint32_t      output_dyld_exports_trie_data_size;
+    char *output_function_variants_data;
+    uint32_t      output_function_variants_data_size;
+    char *output_function_variant_fixups_data;
+    uint32_t      output_function_variant_fixups_data_size;
 
     uint32_t      output_ilocalsym;
     uint32_t      output_nlocalsym;
@@ -262,6 +289,10 @@ struct object {
     uint32_t      output_nmodtab;
     struct dylib_reference *output_refs;
     uint32_t      output_nextrefsyms;
+
+#ifdef CODEDIRECTORY_SUPPORT
+    struct codedir* output_codedir;
+#endif /* CODEDIRECTORY_SUPPORT */
 
     /*
      * For strip(1) to strip DWARF debug info it must run ld -r on the original

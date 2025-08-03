@@ -25,6 +25,7 @@
 #endif /* !defined(RLD) */
 #include "stdlib.h"
 #include "string.h"
+#include <mach/machine-cctools.h>
 #include <mach/mach.h>
 #include "stuff/openstep_mach.h"
 #include "stuff/arch.h"

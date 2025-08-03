@@ -37,6 +37,7 @@
 #include "shlib.h"
 #endif
 #include <libc.h>
+#include <mach/machine-cctools.h>
 #include <mach/mach.h>
 #include "stuff/openstep_mach.h"
 #include <stddef.h>
@@ -431,7 +432,7 @@ void *cookie)
 		    if(ofile.arch_flag.cputype ==
 			    host_arch_flag.cputype &&
 		       ((ofile.arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ==
-#ifdef __arm__
+#if defined(__arm__) || defined(__arm64__) || defined(__arm64e__)
 			(specific_arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ||
 #else
 			(host_arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ||
@@ -869,8 +870,10 @@ enum bool archives_with_fat_objects)
 	
 	addr = NULL;
 	if(size != 0){
-	    addr = mmap(0, size, PROT_READ|PROT_WRITE, MAP_FILE|MAP_PRIVATE, fd,
-		        0);
+	    // <rdar://29161359> try mmap() with MAP_RESILIENT_CODESIGN to allow corrupt files to be re-code signed
+	    addr = mmap(0, size, PROT_READ|PROT_WRITE, MAP_FILE|MAP_PRIVATE|MAP_RESILIENT_CODESIGN, fd,0);
+	    if (addr == MAP_FAILED)
+		addr = mmap(0, size, PROT_READ|PROT_WRITE, MAP_FILE|MAP_PRIVATE, fd,0);
 	    if((intptr_t)addr == -1){
 		system_error("can't map file: %s", file_name);
 		close(fd);
@@ -1771,6 +1774,52 @@ cleanup:
 }
 
 /*
+ * member_addr_set() sets the ofile's 'member_addr' member given a pointer to
+ * the archive file. The ofile's 'member_offset' and 'member_size' must already
+ * be set. If 'member_offset' is pointer aligned, 'member_addr' will point
+ * directly into the archive file. If not, new memory of size 'member_size'
+ * will be allocated into 'member_buffer', the member's file contents will be
+ * copied into the new memory, and this value will be used for 'member_addr'
+ * instead. As a result, all of the member_* pointers for un-aligned files are
+ * valid only while the ofile still points at this member.
+ *
+ * If a caller wants to preserve member_* pointers for unaligned objects, they
+ * must take ownership of the 'member_buffer' pointer by copying its value and
+ * setting ofile->member_buffer to NULL. Callers can then keep the buffer
+ * pointer alive as long as they wish.
+ */
+static
+enum bool
+member_addr_set(
+struct ofile *ofile,
+char* addr)
+{
+    uint64_t offset = ofile->member_offset;
+    uint32_t size = ofile->member_size;
+
+    if (addr+offset+size > ofile->file_addr+ofile->file_size){
+      error("address 0x%llx extends beyond the end of the object file %s",
+            (uint64_t)addr+offset+size, ofile->file_name);
+      return(FALSE);
+    }
+
+    if (ofile->member_buffer) {
+	free(ofile->member_buffer);
+	ofile->member_buffer = NULL;
+    }
+
+    if (offset % sizeof(char*)) {
+	ofile->member_buffer = malloc(size);
+	memcpy(ofile->member_buffer, addr + offset, size);
+	ofile->member_addr = ofile->member_buffer;
+    }
+    else {
+	ofile->member_addr = addr + offset;
+    }
+    return(TRUE);
+}
+
+/*
  * ofile_first_member() set up the ofile structure (the member_* fields and
  * the object file fields if the first member is an object file) for the first
  * member.
@@ -1789,6 +1838,10 @@ struct ofile *ofile)
     uint32_t sizeof_fat_archs;
 
 	/* These fields are to be filled in by this routine, clear them first */
+	if (ofile->member_buffer != NULL) {
+	    free(ofile->member_buffer);
+	    ofile->member_buffer = NULL;
+	}
 	ofile->member_offset = 0;
 	ofile->member_addr = NULL;
 	ofile->member_size = 0;
@@ -1869,9 +1922,13 @@ struct ofile *ofile)
 
 	/* now we know there is a first member so set it up */
 	ar_hdr = (struct ar_hdr *)(addr + offset);
+	if ((char*)ar_hdr > ofile->file_addr + ofile->file_size){
+	    archive_error(ofile, "truncated or malformed (archive header of "
+			  "member extends past the end of the file)");
+	    return(FALSE);
+	}
 	offset += sizeof(struct ar_hdr);
 	ofile->member_offset = offset;
-	ofile->member_addr = addr + offset;
 	ofile->member_size = (uint32_t)strtoul(ar_hdr->ar_size, NULL, 10);
 	if(ofile->member_size > size - sizeof(struct ar_hdr)){
 	    archive_error(ofile, "size of first archive member extends past "
@@ -1882,7 +1939,8 @@ struct ofile *ofile)
 	ofile->member_type = OFILE_UNKNOWN;
 	ofile->member_name = ar_hdr->ar_name;
 	if(strncmp(ofile->member_name, AR_EFMT1, sizeof(AR_EFMT1) - 1) == 0){
-	    ofile->member_name = ar_hdr->ar_name + sizeof(struct ar_hdr);
+	    ofile->member_name = ((char*)ar_hdr->ar_name) +
+				 sizeof(struct ar_hdr);
 	    ar_name_size = (uint32_t)
 		strtoul(ar_hdr->ar_name + sizeof(AR_EFMT1) - 1, NULL, 10);
 	    if(ar_name_size > ofile->member_size){
@@ -1892,13 +1950,15 @@ struct ofile *ofile)
 	    }
 	    ofile->member_name_size = ar_name_size;
 	    ofile->member_offset += ar_name_size;
-	    ofile->member_addr += ar_name_size;
 	    ofile->member_size -= ar_name_size;
 	}
 	else{
 	    ofile->member_name_size = size_ar_name(ar_hdr);
 	    ar_name_size = 0;
 	}
+	if(member_addr_set(ofile, addr) == FALSE)
+	  goto fatcleanup;
+
 	/* Clear these in case there is no table of contents */
 	ofile->toc_addr = NULL;
 	ofile->toc_size = 0;
@@ -2065,6 +2125,10 @@ fatcleanup:
 	ofile->fat_archs = NULL;
 	ofile->fat_archs64 = NULL;
 cleanup:
+	if (ofile->member_buffer != NULL) {
+	    free(ofile->member_buffer);
+	    ofile->member_buffer = NULL;
+	}
 	ofile->member_offset = 0;
 	ofile->member_addr = 0;
 	ofile->member_size = 0;
@@ -2170,9 +2234,13 @@ struct ofile *ofile)
 
 	/* now we know there is a next member so set it up */
 	ar_hdr = (struct ar_hdr *)(addr + offset);
+	if ((char*)ar_hdr > ofile->file_addr + ofile->file_size){
+	    archive_error(ofile, "truncated or malformed (archive header of "
+			    "member extends past the end of the file)");
+	    return(FALSE);
+	}
 	offset += sizeof(struct ar_hdr);
 	ofile->member_offset = offset;
-	ofile->member_addr = addr + offset;
 	ofile->member_size = (uint32_t)strtoul(ar_hdr->ar_size, NULL, 10);
 	if(ofile->member_size > size - sizeof(struct ar_hdr)){
 	    archive_error(ofile, "size of archive member extends past "
@@ -2205,7 +2273,8 @@ struct ofile *ofile)
 	}
 	else if(strncmp(ofile->member_name, AR_EFMT1,
 			sizeof(AR_EFMT1) - 1) == 0){
-	    ofile->member_name = ar_hdr->ar_name + sizeof(struct ar_hdr);
+	    ofile->member_name = ((char*)ar_hdr->ar_name) +
+	                         sizeof(struct ar_hdr);
 	    ar_name_size = (uint32_t)
 		strtoul(ar_hdr->ar_name + sizeof(AR_EFMT1) - 1, NULL, 10);
 	    if(ar_name_size > ofile->member_size){
@@ -2215,13 +2284,15 @@ struct ofile *ofile)
 	    }
 	    ofile->member_name_size = ar_name_size;
 	    ofile->member_offset += ar_name_size;
-	    ofile->member_addr += ar_name_size;
 	    ofile->member_size -= ar_name_size;
 	}
 	else{
 	    ofile->member_name_size = size_ar_name(ar_hdr);
 	    ar_name_size = 0;
 	}
+	if(member_addr_set(ofile, addr) == FALSE)
+	  goto cleanup;
+
 	ofile->member_type = OFILE_UNKNOWN;
 	ofile->object_addr = NULL;
 	ofile->object_size = 0;
@@ -2360,6 +2431,10 @@ cleanup:
 	    ofile->fat_archs = NULL;
 	    ofile->fat_archs64 = NULL;
 	}
+	if (ofile->member_buffer != NULL) {
+	    free(ofile->member_buffer);
+	    ofile->member_buffer = NULL;
+	}
 	ofile->member_offset = 0;
 	ofile->member_addr = NULL;
 	ofile->member_size = 0;
@@ -2403,6 +2478,10 @@ struct ofile *ofile)
     uint32_t sizeof_fat_archs;
 
 	/* These fields are to be filled in by this routine, clear them first */
+	if (ofile->member_buffer != NULL) {
+	    free(ofile->member_buffer);
+	    ofile->member_buffer = NULL;
+	}
 	ofile->member_offset = 0;
 	ofile->member_addr = NULL;
 	ofile->member_size = 0;
@@ -2530,11 +2609,12 @@ struct ofile *ofile)
 		ofile->member_name = ar_name;
 		ofile->member_name_size = i;
 		ofile->member_offset = offset + ar_name_size;
-		ofile->member_addr = addr + offset + ar_name_size;
 		ofile->member_size =
 		    (uint32_t)strtoul(ar_hdr->ar_size, NULL, 10) - ar_name_size;
 		ofile->member_ar_hdr = ar_hdr;
 		ofile->member_type = OFILE_UNKNOWN;
+		if(member_addr_set(ofile, addr) == FALSE)
+		  goto fatcleanup;
 
 		host_byte_sex = get_host_byte_sex();
 
@@ -2674,6 +2754,10 @@ fatcleanup:
 	ofile->fat_archs = NULL;
 	ofile->fat_archs64 = NULL;
 cleanup:
+	if (ofile->member_buffer != NULL) {
+	    free(ofile->member_buffer);
+	    ofile->member_buffer = NULL;
+	}
 	ofile->member_offset = 0;
 	ofile->member_addr = NULL;
 	ofile->member_size = 0;
@@ -3407,10 +3491,16 @@ enum bool archives_with_fat_objects)
 			  "first member extends past the end of the file)");
 	    return(CHECK_BAD);
 	}
+	/* Checking an archive does not require the member_addr. */
+	ofile->member_addr = NULL;
 	while(size > offset){
 	    ar_hdr = (struct ar_hdr *)(addr + offset);
+	    if ((char*)ar_hdr > ofile->file_addr + ofile->file_size){
+                archive_error(ofile, "truncated or malformed (archive header of "
+                              "member extends past the end of the file)");
+                return(CHECK_BAD);
+	    }
 	    ofile->member_offset = offset;
-	    ofile->member_addr = addr + offset;
 	    ofile->member_size = (uint32_t)strtoul(ar_hdr->ar_size, NULL, 10);
 	    ofile->member_ar_hdr = ar_hdr;
 	    ofile->member_name = ar_hdr->ar_name;
@@ -3427,11 +3517,11 @@ enum bool archives_with_fat_objects)
 					 (uint32_t)(size - offset),
 					 &ar_name_size) == CHECK_BAD)
 		    return(CHECK_BAD);
-		ofile->member_name = ar_hdr->ar_name + sizeof(struct ar_hdr);
+		ofile->member_name = ((char*)ar_hdr->ar_name) +
+				     sizeof(struct ar_hdr);
 		ofile->member_name_size = ar_name_size;
 		offset += ar_name_size;
 		ofile->member_offset += ar_name_size;
-		ofile->member_addr += ar_name_size;
 		ofile->member_size -= ar_name_size;
 	    }
 #ifndef OTOOL
@@ -3905,7 +3995,8 @@ struct ofile *ofile)
     struct twolevel_hints_command *hints;
     struct linkedit_data_command *code_sig, *split_info, *func_starts,
 			     *data_in_code, *code_sign_drs, *linkedit_data,
-			     *exports_trie, *chained_fixups;
+			     *exports_trie, *chained_fixups, *atom_info,
+			     *function_variants, *function_variant_fixups;
     struct linkedit_data_command *link_opt_hint;
     struct version_min_command *vers;
     struct build_version_command *bv, *bv1, *bv2;
@@ -3917,6 +4008,7 @@ struct ofile *ofile)
     struct dyld_info_command *dyld_info;
     struct uuid_command *uuid;
     struct rpath_command *rpath;
+    struct target_triple_command *triple;
     struct entry_point_command *ep;
     struct source_version_command *sv;
     struct note_command *nc;
@@ -4018,9 +4110,12 @@ struct ofile *ofile)
 	code_sig = NULL;
 	func_starts = NULL;
 	data_in_code = NULL;
+	atom_info = NULL;
 	code_sign_drs = NULL;
 	link_opt_hint = NULL;
 	exports_trie = NULL;
+	function_variants = NULL;
+	function_variant_fixups = NULL;
 	chained_fixups = NULL;
 	split_info = NULL;
 	cs = NULL;
@@ -4612,6 +4707,17 @@ struct ofile *ofile)
 		split_info = (struct linkedit_data_command *)lc;
 		goto check_linkedit_data_command;
 
+	    case LC_ATOM_INFO:
+		cmd_name = "LC_ATOM_INFO";
+		element_name = "atom info";
+		if(atom_info != NULL){
+		    Mach_O_error(ofile, "malformed object (more than one "
+			"%s command)", cmd_name);
+		    goto return_bad;
+		}
+		atom_info = (struct linkedit_data_command *)lc;
+		goto check_linkedit_data_command;
+
 	    case LC_CODE_SIGNATURE:
 		cmd_name = "LC_CODE_SIGNATURE";
 		element_name = "code signature data";
@@ -4678,6 +4784,28 @@ struct ofile *ofile)
 		exports_trie = (struct linkedit_data_command *)lc;
 		goto check_linkedit_data_command;
 		
+	    case LC_FUNCTION_VARIANTS:
+		cmd_name = "LC_FUNCTION_VARIANTS";
+		element_name = "function variants";
+		if(function_variants != NULL){
+		    Mach_O_error(ofile, "malformed object (more than one "
+				 "%s command)", cmd_name);
+		    goto return_bad;
+		}
+		function_variants = (struct linkedit_data_command *)lc;
+		goto check_linkedit_data_command;
+
+	    case LC_FUNCTION_VARIANT_FIXUPS:
+		cmd_name = "LC_FUNCTION_VARIANT_FIXUPS";
+		element_name = "function variant fixups";
+		if(function_variant_fixups != NULL){
+		    Mach_O_error(ofile, "malformed object (more than one "
+				 "%s command)", cmd_name);
+		    goto return_bad;
+		}
+		function_variant_fixups = (struct linkedit_data_command *)lc;
+		goto check_linkedit_data_command;
+
 	    case LC_DYLD_CHAINED_FIXUPS:
 		cmd_name = "LC_DYLD_CHAINED_FIXUPS";
 		element_name = "chained fixups";
@@ -6692,6 +6820,25 @@ check_dylinker_command:
 		if(rpath->path.offset >= rpath->cmdsize){
 		    Mach_O_error(ofile, "truncated or malformed object (path."
 			"offset field of LC_RPATH command %u extends past the "
+			"end of the file)", i);
+		    goto return_bad;
+		}
+		break;
+	    case LC_TARGET_TRIPLE:
+		if(l.cmdsize < sizeof(struct target_triple_command)){
+		    Mach_O_error(ofile, "malformed object (LC_TARGET_TRIPLE: cmdsize "
+				 "too small) in command %u", i);
+		    goto return_bad;
+		}
+		triple = (struct target_triple_command *)lc;
+		if(triple->cmdsize < sizeof(struct target_triple_command)){
+		    Mach_O_error(ofile, "malformed object (LC_TARGET_TRIPLE command "
+			"%u has too small cmdsize field)", i);
+		    goto return_bad;
+		}
+		if(triple->triple.offset >= triple->cmdsize){
+		    Mach_O_error(ofile, "truncated or malformed object (path."
+			"offset field of LC_TARGET_TRIPLE command %u extends past the "
 			"end of the file)", i);
 		    goto return_bad;
 		}

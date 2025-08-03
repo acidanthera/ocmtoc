@@ -57,6 +57,7 @@
 #ifdef LTO_SUPPORT
 #include "stuff/lto.h"
 #endif /* LTO_SUPPORT */
+#include <mach-o/cctools_helpers.h>
 
 #include <mach/mach_init.h>
 #if defined(__OPENSTEP__) || defined(__GONZO_BUNSEN_BEAKER__)
@@ -64,6 +65,13 @@
 #else
 #include <servers/bootstrap.h>
 #endif
+
+// can't include "stuff/breakout.h" because it also declares `arch` and other structs used here
+extern struct ofile* breakout(const char *filename, void** archs, uint32_t* narchs, enum bool);
+
+
+// if a member file in a static library has this name, then force load it
+#define ALWAYS_LOAD_MEMBER_NAME "__ALWAYS_LOAD.o"
 
 /*
  * This is used internally to build the table of contents.
@@ -120,6 +128,12 @@ struct cmd_flags {
     uint32_t
 	nfiles;		/* number of file name arguments */
     char **filelist;	/* filelist argument the file name argument came from */
+    const char **reflibs;	/* lib names to embedded references to */
+    uint32_t
+	nreflibs;	/* number of libnames */
+    const char **reffw;	/* framework names to embedded references to */
+    uint32_t
+	nreffw;		/* number of framework */
     enum bool
 	no_files_ok;	/* ok to see no files */
     enum bool ranlib;	/* set if this is run as ranlib not libtool */
@@ -185,6 +199,7 @@ struct cmd_flags {
     enum bool toc64;	/* force the use of the 64-bit toc */
     enum bool fat64;	/* force the use of 64-bit fat files
 			   when a fat is to be created */
+    enum bool sdk_libs_as_refs;
 };
 static struct cmd_flags cmd_flags = { 0 };
 
@@ -237,6 +252,13 @@ struct member {
     uint64_t offset;	    	    /* current working offset and final offset*/
     struct ar_hdr ar_hdr;	    /* the archive header for this member */
     char null_byte;		    /* space to write '\0' for ar_hdr */
+
+    /*
+     * if member data is not backed by a properly aligned mapped file, buffer
+     * holds aligned memory for this member data; otherwise NULL.
+     */
+    char* buffer;
+
     char *object_addr;		    /* the address of the object file */
     uint32_t object_size;	    /* the size of the object file */
     enum byte_sex object_byte_sex;  /* the byte sex of the object file */
@@ -439,6 +461,9 @@ char **envp)
 	maxfiles = argc;
         cmd_flags.files = allocate(sizeof(char *) * maxfiles);
         cmd_flags.filelist = allocate(sizeof(char *) * maxfiles);
+	cmd_flags.reflibs = allocate(sizeof(char *) * maxfiles);
+	cmd_flags.reffw = allocate(sizeof(char *) * maxfiles);
+
         memset(cmd_flags.filelist, '\0', sizeof(char *) * maxfiles);
 	for(i = 1; i < argc; i++){
 	    if(argv[i][0] == '-'){
@@ -513,12 +538,22 @@ char **envp)
 		    filelist = argv[i + 1];
 		    dirname = strrchr(filelist, ',');
 		    if(dirname != NULL){
-			*dirname = '\0';
-			dirname++;
+			// <rdar://88352605> Filelist path may include ','
+			// Try opening file assuming that ',' is a part of the list file path
+			// If open fails, fallback and try again assuming there is a dirname too
+			if((fd = open(filelist, O_RDONLY, 0)) == -1) {
+			    *dirname = '\0';
+			    dirname++;
+			    fd = open(filelist, O_RDONLY, 0);
+			} else
+			    dirname = "";
 		    }
-		    else
+		    else {
 			dirname = "";
-		    if((fd = open(filelist, O_RDONLY, 0)) == -1)
+			fd = open(filelist, O_RDONLY, 0);
+		    }
+
+		    if(fd == -1)
 			system_fatal("can't open file list file: %s", filelist);
 		    if(fstat(fd, &stat_buf) == -1)
 			system_fatal("can't stat file list file: %s", filelist);
@@ -1034,6 +1069,20 @@ char **envp)
 		    /* We need to ignore -g[gdb,codeview,stab][number] flags */
 			;
 		}
+		else if(strncmp(argv[i], "-ref-l", 6) == 0){
+		    cmd_flags.reflibs[cmd_flags.nreflibs++] = &argv[i][6];
+		}
+		else if(strcmp(argv[i], "-ref-framework") == 0){
+		    if(i + 1 >= argc){
+			error("not enough arguments follow %s", argv[i]);
+			usage();
+		    }
+		    ++i;
+		    cmd_flags.reffw[cmd_flags.nreffw++] = argv[i];
+		}
+		else if(strcmp(argv[i], "-encode_sdk_libraries_as_references") == 0){
+		    cmd_flags.sdk_libs_as_refs = TRUE;
+		}
 		else if(strcmp(argv[i], "-pg") == 0){
 		    if(cmd_flags.ranlib == TRUE){
 			error("unknown option: %s", argv[i]);
@@ -1446,7 +1495,7 @@ void)
     struct ofile *ofiles;
     char *file_name;
     enum bool flag, ld_trace_archive_printed;
-    
+
 	/*
 	 * For libtool processing put all input files in the specified output
 	 * file.  For ranlib processing all input files should be archives or
@@ -1462,6 +1511,18 @@ void)
 		    continue;
 		file_name = file_name_from_l_flag(cmd_flags.files[i]);
 		if(file_name != NULL) {
+		    if(cmd_flags.sdk_libs_as_refs && (next_root != NULL)) {
+			size_t sdkLen = strlen(next_root);
+			if(strlen(file_name) > sdkLen) {
+			    if(strncmp(file_name,next_root,sdkLen) == 0){
+				// lib is in SDK, switch to auto-link hint
+				const char* libArg = cmd_flags.files[i];
+				cmd_flags.reflibs[cmd_flags.nreflibs++] = &libArg[2];
+				continue;
+			    }
+			}
+		    }
+
 		    if(ofile_map(file_name, NULL, NULL, ofiles + i, TRUE) ==
 		       FALSE)
 			continue;
@@ -1558,13 +1619,14 @@ void)
 		}while(ofile_next_arch(ofiles + i) == TRUE);
 	    }
 	    else if(ofiles[i].file_type == OFILE_ARCHIVE){
-                if (cmd_flags.ld_trace_archives == TRUE &&
-                    cmd_flags.dynamic == FALSE &&
-                    ld_trace_archive_printed == FALSE){
-                    ld_trace_archive(ofiles[i].file_name);
-                    ld_trace_archive_printed =
-                        TRUE;
-                }
+		/* log the archive */
+		if (cmd_flags.ld_trace_archives == TRUE &&
+		    cmd_flags.dynamic == FALSE &&
+		    ld_trace_archive_printed == FALSE){
+		    ld_trace_archive(ofiles[i].file_name);
+		    ld_trace_archive_printed =
+		    TRUE;
+		}
 		/* loop through archive */
 		if((flag = ofile_first_member(ofiles + i)) == TRUE){
 		    if(ofiles[i].member_ar_hdr != NULL &&
@@ -1681,6 +1743,35 @@ ranlib_fat_error:
 	    }
 	    errors += previous_errors;
 	}
+    
+
+
+	// if any -ref args are used in -static mode, build extra .o file that lists them
+	if((cmd_flags.nreflibs != 0) || (cmd_flags.nreffw != 0)){
+	    if(cmd_flags.dynamic == FALSE){
+		// make a .o file for each arch in the output file
+		for(int i=0; i < narchs; ++i){
+		    char extraFilePath[PATH_MAX];
+		    make_obj_file_with_linker_options(archs[i].arch_flag.cputype, archs[i].arch_flag.cpusubtype,
+						       cmd_flags.nreflibs, cmd_flags.reflibs,
+						       cmd_flags.nreffw, cmd_flags.reffw,
+						       extraFilePath);
+		    void* dummyArchs[1];
+		    uint32_t dummynarchs = 0;
+		    struct ofile* extraObj = breakout(extraFilePath, dummyArchs, &dummynarchs, FALSE);
+		    extraObj->file_name        = ALWAYS_LOAD_MEMBER_NAME;
+		    extraObj->member_name      = extraObj->file_name;
+		    extraObj->member_name_size = 15;
+		    extraObj->member_size      = (uint32_t)extraObj->file_size;
+		    extraObj->member_type      = OFILE_Mach_O;
+		    add_member(extraObj);
+		    unlink(extraFilePath);
+		}
+	    }
+	}
+
+
+
 	if(cmd_flags.ranlib == FALSE && errors == 0)
 	    create_library(cmd_flags.output, NULL);
 
@@ -1876,7 +1967,7 @@ struct ofile *ofile)
 	 * If this did not come from an archive get the stat info which is
 	 * needed to fill in the archive header for this member.
 	 */
-	if(ofile->member_ar_hdr == NULL){
+	if((ofile->member_ar_hdr == NULL) && (strcmp(ofile->file_name,ALWAYS_LOAD_MEMBER_NAME) != 0)){
 	    if(stat(ofile->file_name, &stat_buf) == -1){
 		system_error("can't stat file: %s", ofile->file_name);
 		return;
@@ -2337,6 +2428,19 @@ struct ofile *ofile)
 
 	if(ofile->mh != NULL ||
 	   ofile->mh64 != NULL){
+	    if (ofile->member_buffer) {
+		/*
+		 * The object file is not properly aligned within the
+		 * archive file. The member object will take ownership
+		 * of the object file's temporary storage, to avoid
+		 * making a second copy. This is safe only as long as
+		 * no other code is looking at this ofile during
+		 * archive enumeration, and the archive enumerator
+		 * advances/resets before member->buffer is freed.
+		 */
+		member->buffer = ofile->member_buffer;
+		ofile->member_buffer = NULL;
+	    }
 	    member->object_addr = ofile->object_addr;
 	    member->object_size = ofile->object_size;
 	    member->object_byte_sex = ofile->object_byte_sex;
@@ -2346,6 +2450,10 @@ struct ofile *ofile)
 	}
 #ifdef LTO_SUPPORT
 	else if(ofile->file_type == OFILE_LLVM_BITCODE){
+	    if (ofile->member_buffer) {
+		member->buffer = ofile->member_buffer;
+		ofile->member_buffer = NULL;
+	    }
 	    member->object_addr = ofile->file_addr;
 	    member->object_size = (uint32_t)ofile->file_size;
 	    member->lto_contents = TRUE;
@@ -2359,6 +2467,10 @@ struct ofile *ofile)
                 (ofile->file_type == OFILE_ARCHIVE &&
                  ofile->member_type == OFILE_FAT &&
                  ofile->arch_type == OFILE_LLVM_BITCODE)){
+	    if (ofile->member_buffer) {
+		member->buffer = ofile->member_buffer;
+		ofile->member_buffer = NULL;
+	    }
             member->object_addr = ofile->object_addr;
             member->object_size = ofile->object_size;
 	    member->lto_contents = TRUE;
@@ -2369,6 +2481,10 @@ struct ofile *ofile)
         }
 #endif /* LTO_SUPPORT */
 	else{
+	    if (ofile->member_buffer) {
+		member->buffer = ofile->member_buffer;
+		ofile->member_buffer = NULL;
+	    }
 	    member->object_addr = ofile->member_addr;
 	    member->object_size = ofile->member_size;
 #ifdef LTO_SUPPORT
@@ -3974,8 +4090,10 @@ char *output)
 		    }
 		}
 		else{
-		    if(cmd_flags.no_warning_for_no_symbols == FALSE)
-			warn_member(arch, member, "has no symbols");
+		    if(cmd_flags.no_warning_for_no_symbols == FALSE){
+			if(strcmp(member->member_name, ALWAYS_LOAD_MEMBER_NAME) != 0)
+			    warn_member(arch, member, "has no symbols");
+		    }
 		}
 	    }
 #ifdef LTO_SUPPORT
@@ -4490,6 +4608,7 @@ warn_duplicate_member_names(
 void)
 {
     uint32_t i, j, len, len1, len2;
+    int dupCount = 0;
 
 	for(i = 0; i < narchs; i++){
 	    /* sort in order of ar_names */
@@ -4504,35 +4623,29 @@ void)
 		if(strncmp(archs[i].members[j].member_name,
 			   archs[i].members[j+1].member_name,
 			   len) == 0){
+		    if(strcmp(archs[i].members[j].member_name, ALWAYS_LOAD_MEMBER_NAME) == 0)
+			continue;
 		    fprintf(stderr, "%s: warning ", progname);
 		    if(narchs > 1)
 			fprintf(stderr, "for architecture: %s ",
 				archs[i].arch_flag.name);
-		    fprintf(stderr, "same member name (%.*s) in output file "
-			    "used for input files: ", (int)len1,
-			    archs[i].members[j].member_name);
-
-		    if(archs[i].members[j].input_ar_hdr != NULL){
-			len = archs[i].members[j].input_base_name_size;
-			fprintf(stderr, "%s(%.*s) and: ",
-				archs[i].members[j].input_file_name, (int)len,
-				archs[i].members[j].input_base_name);
-		    }
-		    else
-			fprintf(stderr, "%s and: ",
-				archs[i].members[j].input_file_name);
-
-		    if(archs[i].members[j+1].input_ar_hdr != NULL){
-			len = archs[i].members[j+1].input_base_name_size;
-			fprintf(stderr, "%s(%.*s) due to use of basename, "
-				"truncation and blank padding\n",
-				archs[i].members[j+1].input_file_name, (int)len,
-				archs[i].members[j+1].input_base_name);
-		    }
-		    else
-			fprintf(stderr, "%s (due to use of basename, truncation"
-				", blank padding or duplicate input files)\n",
-				archs[i].members[j+1].input_file_name);
+		    fprintf(stderr, "duplicate member name '%.*s' "
+			    "from '%s(%.*s)' and '%s(%.*s)'\n",
+			    (int)len1, archs[i].members[j].member_name,
+			    archs[i].members[j].input_file_name,
+			    (int)len, archs[i].members[j].input_base_name,
+			    archs[i].members[j+1].input_file_name,
+			    (int)len, archs[i].members[j+1].input_base_name);
+		    // rdar://110498050 (Rename duplicate archive member names so dsymutil and lldb and find correct .o file)
+		    // lldb and dysmutil use the filename/mod-time from debug notes to file the .o file in a static library
+		    // Duplicate file names mean that could be ambiguous.  To disambiguate, we make a synthetic mod-time
+		    // for files that have a duplicate name.
+		    ++dupCount;
+		    // ar_data is a 12 byte field that needs to filled with spaces after the number
+		    memcpy(archs[i].members[j+1].ar_hdr.ar_date, "            ", 12);
+		    char temp[12];
+		    sprintf(temp, "%-u", dupCount);
+		    memcpy(archs[i].members[j+1].ar_hdr.ar_date, temp, strlen(temp));
 		}
 	    }
 

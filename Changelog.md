@@ -1,6 +1,9 @@
 ocmtoc changelog
 ================
 
+#### v1.0.4
+- Rebased to cctools 1024.3
+
 #### v1.0.3
 - Verify `__RO_RELOCS` protection level
 - Fixed DebugDirectoryEntry size

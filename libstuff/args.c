@@ -1,9 +1,31 @@
-//
-//  args.c
-//  stuff
-//
-//  Created by Michael Trent on 5/31/19.
-//
+/*
+ * Copyright (c) 2019 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ *  args.c
+ *  cctools libstuff
+ *
+ *  Created by Michael Trent on 5/31/19.
+ */
 
 #include "stuff/args.h"
 #include "stuff/errors.h"
@@ -185,23 +207,31 @@ struct string_list* at_paths, int *hint_p)
       }
 
       char* addr = NULL;
+      size_t mapped_size = sb.st_size + 1;
       if (sb.st_size) {
-        addr = mmap(0, (size_t)sb.st_size, PROT_READ | PROT_WRITE,
-                    MAP_FILE | MAP_PRIVATE, fd, 0);
+        addr = (char*)malloc(mapped_size);
         if (!addr) {
-          fprintf(stderr, "error: can't mmap %s: %s\n", at_path,
+          fprintf(stderr, "error: can't malloc %s: %s\n", at_path,
                   strerror(errno));
           close(fd);
           return EXPAND_ERROR;
         }
       }
+      
+      if ( read(fd, addr, sb.st_size) != sb.st_size ) {
+        fprintf(stderr, "can't read the content of %s: %s\n", at_path, strerror(errno));
+        return EXPAND_ERROR;
+      }
+
+      // Make sure the malloc'd buffer is zero terminated.
+      if (sb.st_size) {
+        *(addr + sb.st_size) = '\0';
+      }
 
       if (close(fd)) {
         fprintf(stderr, "error: can't close %s: %s\n", at_path,
                 strerror(errno));
-        if (munmap(addr, (size_t)sb.st_size))
-          fprintf(stderr, "error: can't munmap %s: %s\n", at_path,
-                  strerror(errno));
+        free(addr);
         return EXPAND_ERROR;
       }
 
@@ -222,13 +252,9 @@ struct string_list* at_paths, int *hint_p)
         }
       }
 
-      // unmap the file
+      // free the buffer
       if (addr) {
-        if (munmap(addr, (size_t)sb.st_size)) {
-          fprintf(stderr, "error: can't munmap %s: %s\n", at_path,
-                  strerror(errno));
-          return EXPAND_ERROR;
-        }
+        free(addr);
       }
     }
     else { // if ('@' != argv[i][0])

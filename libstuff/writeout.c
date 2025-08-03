@@ -39,6 +39,10 @@
 #endif /* LTO_SUPPORT */
 #include "stuff/write64.h"
 
+#ifdef CODEDIRECTORY_SUPPORT
+#include "code_directory.h"
+#endif /* CODEDIRECTORY_SUPPORT */
+
 static void copy_new_symbol_info(
     char *p,
     uint32_t *size,
@@ -357,7 +361,7 @@ enum bool deterministic,
 enum bool *seen_archive)
 {
     uint32_t i, j, k, pad, size;
-    uint64_t file_size, offset;
+    uint64_t file_size, offset, full_size;
     uint32_t i32;
     uint64_t i64;
     enum byte_sex target_byte_sex, host_byte_sex;
@@ -375,7 +379,7 @@ enum bool *seen_archive)
     uint32_t ncmds;
     enum bool swapped;
 
-	/* 
+	/*
 	 * If filename is NULL, we use a dummy file name.
 	 */
 	if(filename == NULL)
@@ -456,14 +460,31 @@ enum bool *seen_archive)
 		}
 	    }
 	    else if(archs[i].type == OFILE_Mach_O){
-		size = archs[i].object->object_size
-		       - archs[i].object->input_sym_info_size
-		       + archs[i].object->output_new_content_size
-		       + archs[i].object->output_sym_info_size;
+            full_size = (uint64_t)archs[i].object->object_size
+                      - (uint64_t)archs[i].object->input_sym_info_size
+                      + (uint64_t)archs[i].object->output_new_content_size
+                      + (uint64_t)archs[i].object->output_sym_info_size;
+            if(full_size > UINT_MAX){
+            error("file too large to create because the size "
+                  "of output for file %s exceeds 32-bits ",
+                  archs[i].file_name);
+            return;
+            }
+            size = (uint32_t)full_size;
 		if(archs[i].fat_arch64 != NULL)
 		    file_size = rnd(file_size, 1 << archs[i].fat_arch64->align);
 		else if(archs[i].fat_arch != NULL)
 		    file_size = rnd(file_size, 1 << archs[i].fat_arch->align);
+#ifdef CODEDIRECTORY_SUPPORT
+		/*
+		 * If this file is being re-signed during writeout, adjust the
+		 * size to account for the new signature.
+		 */
+		if (archs[i].object->output_codedir) {
+		    size +=
+			codedir_datasize_delta(archs[i].object->output_codedir);
+		}
+#endif /* CODEDIRECTORY_SUPPORT */
 		file_size += size;
 		if(archs[i].fat_arch64 != NULL)
 		    archs[i].fat_arch64->size = size;
@@ -901,11 +922,21 @@ enum bool *seen_archive)
 		if(archs[i].object->output_sym_info_size == 0 &&
 		   archs[i].object->input_sym_info_size == 0){
 		    size = archs[i].object->object_size;
+#ifdef CODEDIRECTORY_SUPPORT
+		    /*
+		     * This binary is going to be re-signed, and the final
+		     * output may be smaller than the input object size.
+		     * writeout() needs to readjust the size of the file here.
+		     */
+		    if (archs[i].object->output_codedir) {
+			size=codedir_filesize(archs[i].object->output_codedir);
+		    }
+#endif /* CODEDIRECTORY_SUPPORT */
 		    memcpy(p, archs[i].object->object_addr, size);
 		}
 		else{
-		    size = archs[i].object->object_size
-			   - archs[i].object->input_sym_info_size;
+		    size = archs[i].object->object_size -
+			archs[i].object->input_sym_info_size;
 		    memcpy(p, archs[i].object->object_addr, size);
 		    if(archs[i].object->output_new_content_size != 0){
 			memcpy(p + size, archs[i].object->output_new_content,
@@ -917,6 +948,22 @@ enum bool *seen_archive)
 				archs[i].object->hints_cmd,
 				archs[i].object);
 		}
+#ifdef CODEDIRECTORY_SUPPORT
+		/*
+		 * If this file is being re-signed during writeout, the time
+		 * of judgement is at hand.
+		 */
+		if (archs[i].object->output_codedir) {
+		    struct codedir* codedir = archs[i].object->output_codedir;
+		    uint32_t cssize = codedir_datasize(codedir);
+		    size = (size + 15) & (-16); // 16-byte align code signature in output
+		    codedir_write(codedir, p, p + size, size + cssize);
+		    size += cssize;
+
+		    codedir_free(codedir);
+		    archs[i].object->output_codedir = NULL;
+		}
+#endif /* CODEDIRECTORY_SUPPORT */
 	    }
 	    else{ /* archs[i].type == OFILE_UNKNOWN */
 		memcpy(p, archs[i].unknown_addr, archs[i].unknown_size);
@@ -979,6 +1026,18 @@ struct object *object)
 			   object->output_dyld_exports_trie_data_size);
 		*size += object->output_dyld_exports_trie_data_size;
 	    }
+	    if(object->output_function_variants_data_size != 0){
+		if(object->output_function_variants_data != NULL)
+		    memcpy(p + *size, object->output_function_variants_data,
+			   object->output_function_variants_data_size);
+		*size += object->output_function_variants_data_size;
+	    }
+	    if(object->output_function_variant_fixups_data_size != 0){
+		if(object->output_function_variant_fixups_data != NULL)
+		    memcpy(p + *size, object->output_function_variant_fixups_data,
+			   object->output_function_variant_fixups_data_size);
+		*size += object->output_function_variant_fixups_data_size;
+	    }
 	    memcpy(p + *size, object->output_loc_relocs,
 		   dyst->nlocrel * sizeof(struct relocation_info));
 	    *size += dyst->nlocrel *
@@ -1001,6 +1060,12 @@ struct object *object)
 			   object->output_data_in_code_info_data_size);
 		*size += object->output_data_in_code_info_data_size;
 	    }
+		if(object->output_atom_info_data_size != 0){
+		if(object->output_atom_info_data != NULL)
+			memcpy(p + *size, object->output_atom_info_data,
+			   object->output_atom_info_data_size);
+		*size += object->output_atom_info_data_size;
+		}
 	    if(object->output_code_sign_drs_info_data_size != 0){
 		if(object->output_code_sign_drs_info_data != NULL)
 		    memcpy(p + *size, object->output_code_sign_drs_info_data,
@@ -1059,18 +1124,6 @@ struct object *object)
 		   object->output_nextrefsyms * sizeof(struct dylib_reference));
 	    *size += object->output_nextrefsyms *
 		     sizeof(struct dylib_reference);
-	    memcpy(p + *size, object->output_strings,
-		   object->output_strings_size);
-	    *size += object->output_strings_size;
-	    memset(p + *size, '\0', object->output_strings_size_pad);
-	    *size += object->output_strings_size_pad;
-	    if(object->output_code_sig_data_size != 0){
-		*size = (uint32_t)rnd(*size, 16);
-		if(object->output_code_sig_data != NULL)
-		    memcpy(p + *size, object->output_code_sig_data,
-			   object->output_code_sig_data_size);
-		*size += object->output_code_sig_data_size;
-	    }
 	}
 	else{
 	    if(object->output_func_start_info_data_size != 0){
@@ -1085,6 +1138,12 @@ struct object *object)
 			   object->output_data_in_code_info_data_size);
 		*size += object->output_data_in_code_info_data_size;
 	    }
+		if(object->output_atom_info_data_size != 0){
+		if(object->output_atom_info_data != NULL)
+			memcpy(p + *size, object->output_atom_info_data,
+			   object->output_atom_info_data_size);
+		*size += object->output_atom_info_data_size;
+		}
 	    if(object->output_link_opt_hint_info_data_size != 0){
 		if(object->output_link_opt_hint_info_data != NULL)
 		    memcpy(p + *size, object->output_link_opt_hint_info_data,
@@ -1103,19 +1162,29 @@ struct object *object)
 		*size += object->output_nsymbols *
 			 sizeof(struct nlist_64);
 	    }
-	    memcpy(p + *size, object->output_strings,
-		   object->output_strings_size);
-	    *size += object->output_strings_size;
-	    memset(p + *size, '\0', object->output_strings_size_pad);
-	    *size += object->output_strings_size_pad;
-	    if(object->output_code_sig_data_size != 0){
-		*size = (uint32_t)rnd(*size, 16);
-		if(object->output_code_sig_data != NULL)
-		    memcpy(p + *size, object->output_code_sig_data,
-			   object->output_code_sig_data_size);
-		*size += object->output_code_sig_data_size;
-	    }
 	}
+	memcpy(p + *size, object->output_strings,
+	       object->output_strings_size);
+	*size += object->output_strings_size;
+	memset(p + *size, '\0', object->output_strings_size_pad);
+	*size += object->output_strings_size_pad;
+#ifdef CODEDIRECTORY_SUPPORT
+	/*
+	 * If we are re-signing the binary, we don't need to copy the
+	 * output_code_sig_data.
+	 */
+	if (!object->output_codedir) {
+#endif /* CODEDIRECTORY_SUPPORT */
+	if(object->output_code_sig_data_size != 0){
+	    *size = (uint32_t)rnd(*size, 16);
+	    if(object->output_code_sig_data != NULL)
+		memcpy(p + *size, object->output_code_sig_data,
+		       object->output_code_sig_data_size);
+	    *size += object->output_code_sig_data_size;
+	}
+#ifdef CODEDIRECTORY_SUPPORT
+	}
+#endif /* CODEDIRECTORY_SUPPORT */
 }
 
 /*
@@ -1826,11 +1895,14 @@ struct object* object)
     object->split_info_cmd = NULL;
     object->func_starts_info_cmd = NULL;
     object->data_in_code_cmd = NULL;
+    object->atom_info_cmd = NULL;
     object->code_sign_drs_cmd = NULL;
     object->link_opt_hint_cmd = NULL;
     object->dyld_info = NULL;
     object->dyld_exports_trie = NULL;
     object->dyld_chained_fixups = NULL;
+	object->function_variants = NULL;
+	object->function_variant_fixups = NULL;
     object->encryption_info_command = NULL;
     object->encryption_info_command64 = NULL;
     /* TODO: Consider sections, sections64, notes */
@@ -1878,19 +1950,23 @@ struct object* object)
 		break;
 	    case LC_FUNCTION_STARTS:
 		object->func_starts_info_cmd =
-		(struct linkedit_data_command *)lc;
+		    (struct linkedit_data_command *)lc;
 		break;
 	    case LC_DATA_IN_CODE:
 		object->data_in_code_cmd =
-		(struct linkedit_data_command *)lc;
+		    (struct linkedit_data_command *)lc;
+		break;
+		case LC_ATOM_INFO:
+		object->atom_info_cmd =
+			(struct linkedit_data_command *)lc;
 		break;
 	    case LC_DYLIB_CODE_SIGN_DRS:
 		object->code_sign_drs_cmd =
-		(struct linkedit_data_command *)lc;
+		    (struct linkedit_data_command *)lc;
 		break;
 	    case LC_LINKER_OPTIMIZATION_HINT:
 		object->link_opt_hint_cmd =
-		(struct linkedit_data_command *)lc;
+		    (struct linkedit_data_command *)lc;
 		break;
 	    case LC_DYLD_INFO_ONLY:
 	    case LC_DYLD_INFO:
@@ -1901,6 +1977,12 @@ struct object* object)
 		break;
 	    case LC_DYLD_CHAINED_FIXUPS:
 		object->dyld_chained_fixups = (struct linkedit_data_command*)lc;
+		break;
+	    case LC_FUNCTION_VARIANTS:
+	   	object->function_variants = (struct linkedit_data_command*)lc;
+		break;
+	    case LC_FUNCTION_VARIANT_FIXUPS:
+		object->function_variant_fixups = (struct linkedit_data_command*)lc;
 		break;
 	    case LC_ENCRYPTION_INFO:
 		object->encryption_info_command =

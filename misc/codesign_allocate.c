@@ -482,6 +482,12 @@ struct object *object)
 		object->output_split_info_data_size = 
 		    object->split_info_cmd->datasize;
 	    }
+            if(object->atom_info_cmd != NULL){
+		object->output_atom_info_data =
+		(object->object_addr + object->atom_info_cmd->dataoff);
+		object->output_atom_info_data_size =
+		    object->atom_info_cmd->datasize;
+	    }
 	    if(object->func_starts_info_cmd != NULL){
 		object->output_func_start_info_data = 
 		(object->object_addr + object->func_starts_info_cmd->dataoff);
@@ -561,6 +567,8 @@ struct object *object)
 		    sizeof(struct dylib_reference);
 	    if(object->split_info_cmd != NULL)
 		object->input_sym_info_size += object->split_info_cmd->datasize;
+	    if(object->atom_info_cmd != NULL)
+		object->input_sym_info_size += object->atom_info_cmd->datasize;
 	    if(object->func_starts_info_cmd != NULL)
 		object->input_sym_info_size +=
 		    object->func_starts_info_cmd->datasize;
@@ -1037,3 +1045,30 @@ struct object *object)
 	/* reset the pointers into the load commands */
 	reset_load_command_pointers(object);
 }
+
+
+// codesign_allocate use libstuff.a which calls some functions from libcodirectory.dylib
+// The code paths codesign_allocate takes in libstuff.a never use libcodirectory.dylib
+// but it must be linked.  MRM copies the codesign_allocate tool to a new location, which
+// then won't run because libcodirectory.dylib does not exist.
+// This is a hack so that codesign_allocate does not need to link with libcodirectory.dylib
+void libcd_set_input_mem() {
+    fprintf(stderr, "libcd_ functions should not be called in codesign_allocate");
+    exit(EXIT_FAILURE);
+}
+
+void libcd_set_output_mem() {
+    fprintf(stderr, "libcd_ functions should not be called in codesign_allocate");
+    exit(EXIT_FAILURE);
+}
+
+void libcd_serialize() {
+    fprintf(stderr, "libcd_ functions should not be called in codesign_allocate");
+    exit(EXIT_FAILURE);
+}
+
+void libcd_free() {
+    fprintf(stderr, "libcd_ functions should not be called in codesign_allocate");
+    exit(EXIT_FAILURE);
+}
+

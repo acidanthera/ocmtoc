@@ -415,7 +415,7 @@ char **envp)
 	    	require_read_only_relocs = TRUE;
 	    }
 	    else if(strcmp(argv[i], "--version") == 0){
-	    	printf("1.0.3\n");
+	    	printf("1.0.4\n");
 	    	exit(0);
 	    }
 	    else if(input == NULL)

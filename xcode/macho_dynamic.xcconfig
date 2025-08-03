@@ -1,4 +1,3 @@
-
 //
 //  macho_dynamic.xcconfig
 //  cctools
@@ -24,12 +23,7 @@ APPLICATION_EXTENSION_API_ONLY = YES
 INSTALL_PATH = /usr/lib/system
 
 // libmacho is zippered
-//
-// MDT Workaround for <rdar://problem/47985287> Guardian Submission Failure - Yager - cctools - 938
-// stop zippering libmacho in cctools_ofiles_sdk.
-CCTB_IS_cctools_ofiles_sdk = YES
 IS_ZIPPERED_ = YES
-IS_ZIPPERED = IS_ZIPPERED_${CCTB_IS_${CCTB_PROJECT}}
 
 // MDT <rdar://problem/49996819> libmacho.dylib has a zippered 32bit slice on macOSJazz
 // Do not zipper i386
@@ -49,9 +43,6 @@ LIBRARY_SEARCH_PATHS = ${SDKROOT}/usr/lib/system
 LIBMACHO_DYLIBS = -lcompiler_rt -lsystem_malloc -ldyld -lsystem_c
 LIBMACHO_SYSTEM_KERNEL = system_kernel
 LIBMACHO_SYSTEM_KERNEL[sdk=*simulator*] = system_sim_kernel
-
-LIBMACHO_ZIPPER_LD_FLAGS_MACOS_YES = -Wl,-iosmac_version_min,12.0
-LIBMACHO_ZIPPER_LD_FLAGS = ${LIBMACHO_ZIPPER_LD_FLAGS_MACOS_${CCTB_MACOS}}
 
 // MDT <rdar://problem/49996819> libmacho.dylib has a zippered 32bit slice on macOSJazz
 // Do not zipper i386
@@ -97,21 +88,12 @@ PUBLIC_HEADERS_FOLDER_PATH=/usr/include/mach-o
 // the expense of obfuscating the true value of OTHER_TAPI_FLAGSS.
 LIBMACHO_TAPI_FLAGS = -umbrella System -fapplication-extension
 
-LIBMACHO_OTHER_TAPI_FLAGS_MACOS_YES = -target-variant x86_64-apple-ios12.0-macabi
-LIBMACHO_ZIPPER_TAPI_FLAGS = ${LIBMACHO_OTHER_TAPI_FLAGS_MACOS_${CCTB_MACOS}}
-
 // MDT <rdar://problem/49996819> libmacho.dylib has a zippered 32bit slice on macOSJazz
 // Do not zipper i386
 LIBMACHO_ZIPPER_TAPI_FLAGS[arch=i386] =
 
 SLOT_NAME_H = -extra-public-header include/mach/slot_name.h
-SWAP_HPPA_H = -extra-public-header include/mach-o/hppa/swap.h
 SWAP_I386_H = -extra-public-header include/mach-o/i386/swap.h
-SWAP_I860_H = -extra-public-header include/mach-o/i860/swap.h
-SWAP_M68K_H = -extra-public-header include/mach-o/m68k/swap.h
-SWAP_M88K_H = -extra-public-header include/mach-o/m88k/swap.h
-SWAP_PPC_H = -extra-public-header include/mach-o/ppc/swap.h
-SWAP_SPARC_H = -extra-public-header include/mach-o/sparc/swap.h
 
 // MDT <rdar://problem/59894566> cctools_ofiles does not install <mach-o/ldsyms.h> during installhdrs
 // Politely ask tapi to ignore these two files.
@@ -120,4 +102,4 @@ EXCLUDE_LDSYMS_H = -exclude-public-header ${DSTROOT}${PUBLIC_HEADERS_FOLDER_PATH
 
 SUPPORTS_TEXT_BASED_API = YES
 TAPI_VERIFY_MODE = Pedantic
-OTHER_TAPI_FLAGS = ${LIBMACHO_TAPI_FLAGS} ${LIBMACHO_ZIPPER_TAPI_FLAGS} ${SLOT_NAME_H} ${SWAP_HPPA_H} ${SWAP_I386_H} ${SWAP_I860_H} ${SWAP_M68K_H} ${SWAP_M88K_H} ${SWAP_PPC_H} ${SWAP_SPARC_H} ${EXCLUDE_NLIST_H} ${EXCLUDE_LDSYMS_H}
+OTHER_TAPI_FLAGS = ${LIBMACHO_TAPI_FLAGS} ${LIBMACHO_ZIPPER_TAPI_FLAGS} ${SLOT_NAME_H} ${SWAP_I386_H} ${EXCLUDE_NLIST_H} ${EXCLUDE_LDSYMS_H}

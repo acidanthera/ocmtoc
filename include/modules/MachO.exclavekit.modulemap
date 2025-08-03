@@ -1,0 +1,4 @@
+module MachO [system] {
+  umbrella "mach-o"
+  module * { export * }
+}

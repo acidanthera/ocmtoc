@@ -33,6 +33,7 @@
 #include <string.h>
 #include <limits.h>
 #include <ar.h>
+#include <mach/machine-cctools.h>
 #include <mach-o/ranlib.h>
 #include <libc.h>
 #include "stuff/bool.h"
@@ -48,16 +49,14 @@
 #include "dyld_bind_info.h"
 #include "fixup-chains.h"
 #include "ofile_print.h"
-#include "m68k_disasm.h"
-#include "i860_disasm.h"
 #include "i386_disasm.h"
-#include "m88k_disasm.h"
-#include "ppc_disasm.h"
-#include "hppa_disasm.h"
-#include "sparc_disasm.h"
 #include "arm_disasm.h"
 #include "arm64_disasm.h"
 #include "llvm-c/Disassembler.h"
+
+#ifndef LLVMDisassembler_Option_Color
+#define LLVMDisassembler_Option_Color 32
+#endif
 
 /* Name of this program for error messages (argv[0]) */
 char *progname = NULL;
@@ -76,9 +75,11 @@ enum bool Uflag = FALSE; /* print the text symbol by symbol,
 			    for llvm-objdump testing must be used with -t */
 enum bool no_show_raw_insn = FALSE; /* no raw inst, for llvm-objdump testing
 				       with 32-bit arm */
+enum bool show_latency = FALSE; /* show latency numbers when disassembling */
+enum bool use_color = FALSE; /* use color when disassembling */
 #ifdef LLVM_OTOOL
 enum bool show_objdump_command = FALSE; /* print the objdump command */
-static char* object_tool_path = "objdump"; /* path to object tool */
+static char* object_tool_path = "otool-classic"; /* path to object tool */
 #endif /* LLVM_OTOOL */
 enum bool dflag = FALSE; /* print the data */
 enum bool oflag = FALSE; /* print the objctive-C info */
@@ -424,6 +425,9 @@ char **envp)
 	if(argc <= 1)
 	    usage();
 
+	// Enable color disassembly by default if stdout is displayed.
+	use_color = isatty(STDOUT_FILENO);
+
 #ifdef LLVM_OTOOL
 	orig_argc = argc;
 	orig_argv = argv;
@@ -545,6 +549,22 @@ char **envp)
 		no_show_raw_insn = TRUE;
 		continue;
 	    }
+		if(strcmp(argv[i], "-show-latency") == 0){
+			show_latency = TRUE;
+			continue;
+		}
+		if(strcmp(argv[i], "-no-show-latency") == 0){
+			show_latency = FALSE;
+			continue;
+		}
+		if(strcmp(argv[i], "-use-color") == 0){
+			use_color = TRUE;
+			continue;
+		}
+		if(strcmp(argv[i], "-no-use-color") == 0){
+			use_color = FALSE;
+			continue;
+		}
 	    if(argv[i][1] == 'p'){
 		if(argc <=  i + 1){
 		    error("-p requires an argument (a text symbol name)");
@@ -561,16 +581,27 @@ char **envp)
 		show_objdump_command = TRUE;
 		continue;
 	    }
-            if (strcmp(argv[i], "-object-tool-path") == 0){
-                if(argc <=  i + 1){
-                    error("-object-tool-path requires an argument (path to an "
-                          "objdump or otool tool)");
-                    usage();
-                }
-                object_tool_path = argv[i + 1];
-                i++;
-                continue;
-            }
+	    if (strcmp(argv[i], "-object-tool-path") == 0){
+		if(argc <=  i + 1){
+		    error("-object-tool-path requires an argument (path to an "
+			  "objdump or otool tool)");
+		    usage();
+		}
+		object_tool_path = argv[i + 1];
+		i++;
+		continue;
+	    }
+	    if (strcmp(argv[i], "-objdump") == 0){
+		object_tool_path = "objdump";
+		continue;
+	    }
+#else /* LLVM_OTOOL */
+	    if(strcmp(argv[i], "-show-objdump-command") == 0 ||
+	       strcmp(argv[i], "-object-tool-path") == 0 ||
+	       strcmp(argv[i], "-objdump") == 0) {
+		error("only llvm-otool supports %s", argv[i]);
+		usage();
+	    }
 #endif /* LLVM_OTOOL */
 	    if(argv[i][1] == 's'){
 		if(argc <=  i + 2){
@@ -882,7 +913,8 @@ char** argv)
     add_execute_list(otool);
 
     for (int i = 1; i < argc; ++i) {
-	if (!strcmp(argv[i], "-show-objdump-command")) {
+	if (!strcmp(argv[i], "-objdump") ||
+	    !strcmp(argv[i], "-show-objdump-command")) {
 	    continue;
 	}
 	else if (!strcmp(argv[i], "-object-tool-path")) {
@@ -919,93 +951,93 @@ enum bool version)
 
 	reset_execute_list();
 	add_execute_list(objdump);
-	add_execute_list("-macho");
+	add_execute_list("--macho");
 
 	if(fflag)
-	    add_execute_list("-universal-headers");
+	    add_execute_list("--universal-headers");
 	if(aflag){
-	    add_execute_list("-archive-headers");
+	    add_execute_list("--archive-headers");
 	    if(Vflag)
-		add_execute_list("-archive-member-offsets");
+		add_execute_list("--archive-member-offsets");
 	}
 	if(hflag && !lflag)
-	    add_execute_list("-private-header");
+	    add_execute_list("--private-header");
 	if(lflag)
-	    add_execute_list("-private-headers");
+	    add_execute_list("--private-headers");
 	if(xflag){
 	    if(vflag)
-		add_execute_list("-disassemble-all");
+		add_execute_list("--disassemble-all");
 	    else{
-		add_execute_list("-section");
+		add_execute_list("--section");
 		add_execute_list(",__text");
 	    }
 	}
 	else if(tflag){
 	    if(vflag)
-		add_execute_list("-disassemble");
+		add_execute_list("--disassemble");
 	    else{
-		add_execute_list("-section");
+		add_execute_list("--section");
 		add_execute_list("__TEXT,__text");
 	    }
 	}
 	if(tflag || xflag || segname != NULL){
-	    add_execute_list("-full-leading-addr");
-	    add_execute_list("-print-imm-hex");
+	    add_execute_list("--full-leading-addr");
+	    add_execute_list("--print-imm-hex");
 	}
 	if(pflag != NULL){
-	    add_execute_list("-dis-symname");
+	    add_execute_list("--dis-symname");
 	    add_execute_list(pflag);
 	}
 	if(*mcpu != '\0')
-	    add_execute_list(makestr("-mcpu=", mcpu, NULL));
+	    add_execute_list(makestr("--mcpu=", mcpu, NULL));
 	if(Iflag)
-	    add_execute_list("-indirect-symbols");
+	    add_execute_list("--indirect-symbols");
 	if(Gflag)
-	    add_execute_list("-data-in-code");
+	    add_execute_list("--data-in-code");
 	if(Cflag)
-	    add_execute_list("-link-opt-hints");
+	    add_execute_list("--link-opt-hints");
 	if(Pflag)
-	    add_execute_list("-info-plist");
+	    add_execute_list("--info-plist");
 	if(segname != NULL && sectname != NULL){
-	    add_execute_list("-section");
+	    add_execute_list("--section");
 	    add_execute_list(makestr(segname, ",", sectname, NULL));
 	}
 	if(dflag){
-	    add_execute_list("-section");
+	    add_execute_list("--section");
 	    add_execute_list("__DATA,__data");
 	}
 	if(rflag)
-	    add_execute_list("-r");
+	    add_execute_list("--reloc");
 	if(Sflag)
 	    error("for -S functionality, use llvm-nm with -print-armap");
 	if(version)
-	    add_execute_list("-version");
+	    add_execute_list("--version");
 	if(print_bind_info)
-	    add_execute_list("-bind");
+	    add_execute_list("--bind");
 	if(Lflag)
-	    add_execute_list("-dylibs-used");
+	    add_execute_list("--dylibs-used");
 	if(Dflag)
-	    add_execute_list("-dylib-id");
+	    add_execute_list("--dylib-id");
 	if(oflag)
-	    add_execute_list("-objc-meta-data");
+	    add_execute_list("--objc-meta-data");
 
 	if(!vflag)
-	    add_execute_list("-non-verbose");
+	    add_execute_list("--non-verbose");
 	if(!Vflag && (tflag || xflag || segname != NULL))
-	    add_execute_list("-no-symbolic-operands");
+	    add_execute_list("--no-symbolic-operands");
 	if((!jflag && (tflag || xflag || segname != NULL)) || no_show_raw_insn)
-	    add_execute_list("-no-show-raw-insn");
+	    add_execute_list("--no-show-raw-insn");
 	if(Xflag){
-	    add_execute_list("-no-leading-addr");
-	    add_execute_list("-no-leading-headers");
+	    add_execute_list("--no-leading-addr");
+	    add_execute_list("--no-leading-headers");
 	}
 
 	if(all_archs){
-	    add_execute_list("-arch");
+	    add_execute_list("--arch");
 	    add_execute_list("all");
 	}
 	for(i = 0; i < narch_flags; i++){
-	    add_execute_list("-arch");
+	    add_execute_list("--arch");
 	    add_execute_list(arch_flags[i].name);
 	}
 
@@ -1262,8 +1294,15 @@ void *cookie) /* cookie is not used */
 			    size = ofile->fat_archs[ofile->narch].size;
 			}
 		    }
-		    if(addr + size > ofile->file_addr + ofile->file_size)
-			size = (ofile->file_addr + ofile->file_size) - addr;
+
+		    uint64_t file_end;
+		    if (__builtin_add_overflow((uint64_t)ofile->file_addr, ofile->file_size, &file_end)) {
+		       printf("file too large, exceeds pointer size\n");
+		       abort();
+		    }
+
+		    if(addr >= ofile->file_addr && addr < (const char*)file_end && addr + size > (const char*)file_end)
+			size = (const char*)file_end - addr;
 		}
 		else if(ofile->file_type == OFILE_ARCHIVE){
 		    addr = ofile->member_addr;
@@ -1363,8 +1402,14 @@ void *cookie) /* cookie is not used */
 	 */
 	addr = ofile->object_addr;
 	size = ofile->object_size;
-	if(addr + size > ofile->file_addr + ofile->file_size)
-	    size = (ofile->file_addr + ofile->file_size) - addr;
+	uint64_t file_end;
+	if (__builtin_add_overflow((uint64_t)ofile->file_addr, ofile->file_size, &file_end)) {
+	   printf("file too large, exceeds pointer size\n");
+	   abort();
+	}
+
+	if(addr >= ofile->file_addr && addr < (const char*)file_end && addr + size > (const char*)file_end)
+	    size = (const char*)file_end - addr;
 
 	/*
 	 * Assign some local variables to the values in the mach_header for this
@@ -1489,6 +1534,11 @@ void *cookie) /* cookie is not used */
 	    if(symbols != NULL){
 		if((uintptr_t)symbols % sizeof(uint32_t) ||
 		   ofile->object_byte_sex != get_host_byte_sex()){
+           if ((char*)(symbols + (nsymbols * sizeof(struct nlist)))
+					   > ofile->file_addr + ofile->file_size){
+               printf("symbol table extends beyond the end of the file\n");
+			   return;
+           }
 		    allocated_symbols =
 			allocate(nsymbols * sizeof(struct nlist));
 		    memcpy(allocated_symbols, symbols,
@@ -1626,11 +1676,20 @@ void *cookie) /* cookie is not used */
 	}
 
 	if(Mflag){
-	    if(mods != NULL)
-		print_module_table(mods, nmods, strings, strings_size, vflag);
-	    else
-		print_module_table_64(mods64, nmods, strings, strings_size,
-				      vflag);
+        if(mods != NULL){
+            if ((char*)(mods + nmods) > ofile->file_addr + ofile->file_size){
+                printf("modules extends beyond the end of the file\n");
+                return;
+            }
+            print_module_table(mods, nmods, strings, strings_size, vflag);
+        }
+        else{
+            if ((char*)(mods64 + nmods) > ofile->file_addr + ofile->file_size){
+                printf("modules extends beyond the end of the file\n");
+                return;
+            }
+            print_module_table_64(mods64, nmods, strings, strings_size, vflag);
+        }
 	}
 
 	if(Rflag){
@@ -1705,11 +1764,17 @@ void *cookie) /* cookie is not used */
 	    if(Gflag)
 		print_dices(dices, ndices, vflag);
 	}
-	if(Iflag)
+	if(Iflag){
+	    if ((char*)(indirect_symbols + nindirect_symbols) >
+            ofile->file_addr + ofile->file_size) {
+            printf("indirect symbols extends beyond the end of the file\n");
+            return;
+	    }
 	    print_indirect_symbols(ofile->load_commands, mh_ncmds,mh_sizeofcmds,
 		mh_cputype, ofile->object_byte_sex, indirect_symbols,
 		nindirect_symbols, symbols, symbols64, nsymbols, strings,
 		strings_size, vflag);
+	}
 
 	if(rflag)
 	    print_reloc(ofile->load_commands, mh_ncmds, mh_sizeofcmds,
@@ -1814,14 +1879,15 @@ void *cookie) /* cookie is not used */
 		    if(tflag)
 			printf("(%s,%s) section\n", SEG_TEXT, SECT_TEXT);
 		    else if(xflag){
-			if (mh_filetype == MH_OBJECT)
-			    printf("(%s,%s) section\n", SEG_TEXT, SECT_TEXT);
-			else
-			    printf("(%s,%s) section\n", segnames[i], SECT_TEXT);
+			printf("(%s,%s) section\n", segnames[i], SECT_TEXT);
 		    }
 		    else
 			printf("Contents of (%.16s,%.16s) section\n", segname,
 			       sectname);
+		}
+		if (sect + sect_size > ofile->file_addr + ofile->file_size){
+		  printf("(%s,%s) extends beyond the end of the file\n",  SEG_TEXT, SECT_TEXT);
+		  return;
 		}
 		if(Uflag)
 		    print_text_by_symbols(mh_cputype, ofile->object_byte_sex,
@@ -1886,9 +1952,14 @@ void *cookie) /* cookie is not used */
 
 		if(Xflag == FALSE)
 		    printf("(%s,%s) section\n", SEG_DATA, SECT_DATA);
-		if(sect != NULL)
-		    print_sect(mh_cputype, ofile->object_byte_sex, sect,
-			sect_size, sect_addr, Vflag);
+		if(sect != NULL) {
+		  if (sect + sect_size > ofile->file_addr + ofile->file_size){
+			printf("(%s,%s) extends beyond the end of the file\n", SEG_DATA, SECT_DATA);
+			return;
+		  }
+		  print_sect(mh_cputype, ofile->object_byte_sex, sect,
+		  sect_size, sect_addr, Vflag);
+		}
 	    }
 	}
 
@@ -3356,7 +3427,7 @@ uint32_t* out_nsegname)
 		
 		p = (char *)lc + sizeof(struct segment_command);
 		found = FALSE;
-		for(j = 0; !found && j < sg.nsects ; j++){
+		for(j = 0; j < sg.nsects ; j++){
 		    if(p + sizeof(struct section) >
 		       (char *)load_commands + sizeofcmds){
 			printf("section structure command extends past "
@@ -3376,9 +3447,9 @@ uint32_t* out_nsegname)
 			segnames = realloc(segnames,
 					   sizeof(*segnames)*(nsegname+1));
 			iseg = nsegname++;
-			segnames[iseg] = calloc(1, sizeof(s64.segname) + 1);
-			memcpy(segnames[iseg], s64.segname,
-			       sizeof(s64.segname));
+			segnames[iseg] = calloc(1, sizeof(s.segname) + 1);
+			memcpy(segnames[iseg], s.segname,
+			       sizeof(s.segname));
 			found = TRUE;
 		    }
 		    
@@ -3398,7 +3469,7 @@ uint32_t* out_nsegname)
 		
 		    p = (char *)lc + sizeof(struct segment_command_64);
 		    found = FALSE;
-		for(j = 0; !found && j < sg64.nsects ; j++){
+		for(j = 0; j < sg64.nsects ; j++){
 		    if(p + sizeof(struct section) >
 		       (char *)load_commands + sizeofcmds){
 			printf("section structure command extends past "
@@ -4225,12 +4296,24 @@ uint64_t seg_addr)
 		}
 		llvm_disasm_set_options(arm_dc,
 		    LLVMDisassembler_Option_PrintImmHex);
-		llvm_disasm_set_options(arm_dc,
-		    LLVMDisassembler_Option_PrintLatency);
+		if(show_latency){
+			llvm_disasm_set_options(arm_dc,
+				LLVMDisassembler_Option_PrintLatency);
+		}
+		if(use_color){
+			llvm_disasm_set_options(arm_dc,
+				LLVMDisassembler_Option_Color);
+		}
 		llvm_disasm_set_options(thumb_dc,
 		    LLVMDisassembler_Option_PrintImmHex);
-		llvm_disasm_set_options(thumb_dc,
-		    LLVMDisassembler_Option_PrintLatency);
+		if(show_latency){
+			llvm_disasm_set_options(thumb_dc,
+				LLVMDisassembler_Option_PrintLatency);
+		}
+		if(use_color){
+		  llvm_disasm_set_options(thumb_dc,
+				LLVMDisassembler_Option_Color);
+		}
 		if(eflag){
 		    llvm_disasm_set_options(arm_dc,
 			LLVMDisassembler_Option_UseMarkup);
@@ -4248,8 +4331,14 @@ uint64_t seg_addr)
 		    LLVMDisassembler_Option_PrintImmHex);
 		llvm_disasm_set_options(i386_dc,
 		    LLVMDisassembler_Option_SetInstrComments);
-		llvm_disasm_set_options(i386_dc,
-		    LLVMDisassembler_Option_PrintLatency);
+		if(show_latency){
+			llvm_disasm_set_options(i386_dc,
+				LLVMDisassembler_Option_PrintLatency);
+		}
+		if(use_color){
+			llvm_disasm_set_options(i386_dc,
+				LLVMDisassembler_Option_Color);
+		}
 		if(eflag)
 		    llvm_disasm_set_options(i386_dc,
 			LLVMDisassembler_Option_UseMarkup);
@@ -4264,23 +4353,35 @@ uint64_t seg_addr)
 		    LLVMDisassembler_Option_PrintImmHex);
 		llvm_disasm_set_options(x86_64_dc,
 		    LLVMDisassembler_Option_SetInstrComments);
-		llvm_disasm_set_options(x86_64_dc,
-		    LLVMDisassembler_Option_PrintLatency);
+		if(show_latency){
+			llvm_disasm_set_options(x86_64_dc,
+				LLVMDisassembler_Option_PrintLatency);
+		}
+		if(use_color){
+			llvm_disasm_set_options(x86_64_dc,
+				LLVMDisassembler_Option_Color);
+		}
 		if(eflag)
 		    llvm_disasm_set_options(x86_64_dc,
 			LLVMDisassembler_Option_UseMarkup);
-	    }
-	    if(cputype == CPU_TYPE_ARM64 || cputype == CPU_TYPE_ARM64_32){
-		arm64_dc = create_arm64_llvm_disassembler(cpusubtype);
-		if(arm64_dc == NULL){
-		    printf("can't create arm64 llvm disassembler\n");
-		    return;
 		}
-		llvm_disasm_set_options(arm64_dc,
-		    LLVMDisassembler_Option_PrintImmHex);
-		llvm_disasm_set_options(arm64_dc,
-		    LLVMDisassembler_Option_PrintLatency);
-	    }
+		if(cputype == CPU_TYPE_ARM64 || cputype == CPU_TYPE_ARM64_32){
+			arm64_dc = create_arm64_llvm_disassembler(cpusubtype);
+			if(arm64_dc == NULL){
+			    printf("can't create arm64 llvm disassembler\n");
+			    return;
+			}
+			llvm_disasm_set_options(arm64_dc,
+			    LLVMDisassembler_Option_PrintImmHex);
+			if(show_latency){
+				llvm_disasm_set_options(arm64_dc,
+					LLVMDisassembler_Option_PrintLatency);
+			}
+			if(use_color){
+				llvm_disasm_set_options(arm64_dc,
+					LLVMDisassembler_Option_Color);
+			}
+		}
 	    if(gflag){
 		ninsts = 100;
 		insts = allocate(sizeof(struct inst) * ninsts);
@@ -4318,15 +4419,7 @@ uint64_t seg_addr)
 			    printf("\t");
 		    }
 		}
-		if(cputype == CPU_TYPE_POWERPC64)
-		    j = ppc_disassemble(sect, (uint32_t)size - i,
-				(uint32_t)cur_addr, (uint32_t)addr,
-				object_byte_sex, relocs, nrelocs, symbols,
-				symbols64, nsymbols, sorted_symbols,
-				nsorted_symbols, strings, strings_size,
-				indirect_symbols, nindirect_symbols,
-				load_commands, ncmds, sizeofcmds, verbose);
-		else if(cputype == CPU_TYPE_X86_64)
+		if(cputype == CPU_TYPE_X86_64)
 		    j = i386_disassemble(sect, (uint32_t)size - i, cur_addr, addr,
 				object_byte_sex, relocs, nrelocs, ext_relocs,
 				next_relocs, loc_relocs, nloc_relocs, dbi, ndbi,
@@ -4336,20 +4429,6 @@ uint64_t seg_addr)
 				load_commands, ncmds, sizeofcmds, verbose,
 				llvm_mc, i386_dc, x86_64_dc , object_addr,
 				object_size, &(insts[n]), NULL, 0);
-	 	else if(cputype == CPU_TYPE_MC680x0)
-		    j = m68k_disassemble(sect, (uint32_t)size - i,
-				 (uint32_t)cur_addr, (uint32_t)addr,
-				object_byte_sex, relocs, nrelocs, symbols,
-				nsymbols, sorted_symbols, nsorted_symbols,
-				strings, strings_size, indirect_symbols,
-				nindirect_symbols, load_commands, ncmds,
-				sizeofcmds, verbose);
-		else if(cputype == CPU_TYPE_I860)
-		    j = i860_disassemble(sect, (uint32_t)size - i,
-				 (uint32_t)cur_addr, (uint32_t)addr,
-				object_byte_sex, relocs, nrelocs, symbols,
-				nsymbols, sorted_symbols, nsorted_symbols,
-				strings, strings_size, verbose);
 		else if(cputype == CPU_TYPE_I386)
 		    j = i386_disassemble(sect, (uint32_t)size - i,cur_addr,addr,
 				object_byte_sex, relocs, nrelocs, ext_relocs,
@@ -4360,35 +4439,6 @@ uint64_t seg_addr)
 				load_commands, ncmds, sizeofcmds, verbose,
 				llvm_mc, i386_dc, x86_64_dc, object_addr,
 				object_size, &(insts[n]), NULL, 0);
-		else if(cputype == CPU_TYPE_MC88000)
-		    j = m88k_disassemble(sect, (uint32_t)size - i,
-				 (uint32_t)cur_addr, (uint32_t)addr,
-				object_byte_sex, relocs, nrelocs, symbols,
-				nsymbols, sorted_symbols, nsorted_symbols,
-				strings, strings_size, verbose);
-		else if(cputype == CPU_TYPE_POWERPC ||
-			cputype == CPU_TYPE_VEO)
-		    j = ppc_disassemble(sect, (uint32_t)size - i,
-					(uint32_t)cur_addr, (uint32_t)addr,
-				object_byte_sex, relocs, nrelocs, symbols,
-				symbols64, nsymbols, sorted_symbols,
-				nsorted_symbols, strings, strings_size,
-				indirect_symbols, nindirect_symbols,
-				load_commands, ncmds, sizeofcmds, verbose);
-		else if(cputype == CPU_TYPE_HPPA)
-		    j = hppa_disassemble(sect, (uint32_t)size - i,
-				(uint32_t)cur_addr, (uint32_t)addr,
-				object_byte_sex, relocs, nrelocs, symbols,
-				nsymbols, sorted_symbols, nsorted_symbols,
-				strings, strings_size, verbose);
-		else if(cputype == CPU_TYPE_SPARC)
-		    j = sparc_disassemble(sect, (uint32_t)size - i,
-				(uint32_t)cur_addr, (uint32_t)addr,
-				object_byte_sex, relocs, nrelocs, symbols,
-				nsymbols, sorted_symbols, nsorted_symbols,
-				strings, strings_size, indirect_symbols,
-				nindirect_symbols, load_commands, ncmds,
-				sizeofcmds, verbose);
 		else if(cputype == CPU_TYPE_ARM)
 		    j = arm_disassemble(sect, (uint32_t)size - i,
 				(uint32_t)cur_addr, (uint32_t)addr,
@@ -4409,7 +4459,6 @@ uint64_t seg_addr)
 				strings_size, indirect_symbols, nindirect_symbols,
 				cputype, load_commands, ncmds, sizeofcmds,
 				object_addr, object_size, verbose, arm64_dc);
-		
 		else{
 		    printf("Can't disassemble unknown cputype %d\n", cputype);
 		    return;

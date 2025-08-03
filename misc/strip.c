@@ -49,13 +49,14 @@
 #include "stuff/write64.h"
 #include "stuff/diagnostics.h"
 #ifdef TRIE_SUPPORT
-#include <mach-o/prune_trie.h>
+#include <mach-o/cctools_helpers.h>
 #endif /* TRIE_SUPPORT */
 
 /* These are set from the command line arguments */
 __private_extern__
 char *progname = NULL;	/* name of the program for error messages (argv[0]) */
 static char *output_file;/* name of the output file */
+static const char *input_leaf_name; /* name of the input file */
 static char *sfile;	/* filename of global symbol names to keep */
 static char *Rfile;	/* filename of global symbol names to remove */
 static uint32_t Aflag;	/* save only absolute symbols with non-zero value and
@@ -80,6 +81,8 @@ static uint32_t cflag;	/* -c strip section contents from dynamic libraries
 static uint32_t no_uuid;/* -no_uuid strip LC_UUID load commands */
 static uint32_t no_split_info; /* -no_split_info strip LC_SEGMENT_SPLIT_INFO
 				  load command and its payload */
+static uint32_t no_atom_info; /* -no_atom_info strip LC_ATOM_INFO
+				  load command and its payload */
 static uint32_t no_code_signature_warning;
 		/* -no_code_signature_warning then don't warn when the code
 		   signature would be invalid */
@@ -93,6 +96,11 @@ static uint32_t strip_all = 1;
  * This has the same effect as -r and -u.
  */
 static enum bool default_dyld_executable = FALSE;
+
+/*
+ * This is set if the object is an executable (MH_EXECUTE) that is for use with the dynamic linker.
+ */
+static enum bool dyld_executable = FALSE;
 
 /*
  * When the -N flag is used it may not be possible to strip all nlists because
@@ -212,7 +220,7 @@ static void strip_file(
     char *input_file,
     struct arch_flag *arch_flags,
     uint32_t narch_flags,
-    enum bool all_archs);
+    enum bool all_archs, enum bool no_options);
 
 static void strip_arch(
     struct arch *archs,
@@ -293,6 +301,11 @@ static void strip_LC_UUID_commands(
     struct object *object);
 
 static void strip_LC_SEGMENT_SPLIT_INFO_command(
+    struct arch *arch,
+    struct member *member,
+    struct object *object);
+
+static void strip_LC_ATOM_INFO_command(
     struct arch *arch,
     struct member *member,
     struct object *object);
@@ -409,6 +422,7 @@ char *envp[])
     struct arch_flag *arch_flags;
     uint32_t narch_flags;
     enum bool all_archs;
+    enum bool no_options;
     struct symbol_list *sp;
 
 	diagnostics_enable(getenv("CC_LOG_DIAGNOSTICS") != NULL);
@@ -420,6 +434,7 @@ char *envp[])
 	arch_flags = NULL;
 	narch_flags = 0;
 	all_archs = FALSE;
+	no_options = TRUE;
 
 	files_specified = 0;
 	args_left = 1;
@@ -429,6 +444,7 @@ char *envp[])
 		    args_left = 0;
 		    break;
 		}
+		no_options = FALSE;
 		if(strcmp(argv[i], "-o") == 0){
 		    if(i + 1 >= argc)
 			fatal("-o requires an argument");
@@ -467,6 +483,9 @@ char *envp[])
 		}
 		else if(strcmp(argv[i], "-no_split_info") == 0){
 		    no_split_info = 1;
+		}
+		else if(strcmp(argv[i], "-no_atom_info") == 0){
+		    no_atom_info = 1;
 		}
 		else if(strcmp(argv[i], "-no_code_signature_warning") == 0){
 		    no_code_signature_warning = 1;
@@ -661,9 +680,9 @@ char *envp[])
 		char resolved_path[PATH_MAX + 1];
 
 		if(realpath(argv[i], resolved_path) == NULL)
-		    strip_file(argv[i], arch_flags, narch_flags, all_archs);
+		    strip_file(argv[i], arch_flags, narch_flags, all_archs, no_options);
 		else
-		    strip_file(resolved_path, arch_flags,narch_flags,all_archs);
+		    strip_file(resolved_path, arch_flags,narch_flags,all_archs, no_options);
 		files_specified++;
 	    }
 	}
@@ -698,7 +717,8 @@ strip_file(
 char *input_file,
 struct arch_flag *arch_flags,
 uint32_t narch_flags,
-enum bool all_archs)
+enum bool all_archs,
+enum bool no_optionss)
 {
     struct ofile *ofile;
     struct arch *archs;
@@ -722,8 +742,20 @@ enum bool all_archs)
 	if(errors)
 	    return;
 
+#ifndef NMEDIT
+	// rdar://77566992 (UNIX10 Conformance | VSC strip assertion 1001 failed.
+	// strip should strip the archive being created using ar for c sources
+	// compiled with -g option.)
+	if (ofile->file_type == OFILE_ARCHIVE) {
+	    Sflag = TRUE;
+	}
+#endif
 	/* checkout the file for symbol table replacement processing */
 	checkout(archs, narchs);
+
+	/* save current input file name */
+	const char* slash = strrchr(input_file, '/');
+	input_leaf_name = slash ? slash + 1 : input_file;
 
 	/* process the symbols in the input file */
 	strip_arch(archs, narchs, arch_flags, narch_flags, all_archs);
@@ -1085,6 +1117,7 @@ struct object *object)
     uint32_t swift_version;
     enum bool nlist_outofsync_with_dyldinfo;
     uint32_t mh_flags;
+    uint32_t orgCodeSigOffset = 0;
 
 	if(object->mh != NULL)
 	    mh_flags = object->mh->flags;
@@ -1115,7 +1148,7 @@ struct object *object)
 	 */
 	if((object->st == NULL || object->st->nsyms == 0)
 #ifndef NMEDIT
-	   && !cflag && !no_uuid && !no_split_info
+	   && !cflag && !no_uuid && !no_split_info && !no_atom_info
 #endif
 	   ) {
 	    warning_arch(arch, member,
@@ -1236,7 +1269,8 @@ struct object *object)
 				   section_type == S_LAZY_SYMBOL_POINTERS ||
 				   section_type ==
 						S_LAZY_DYLIB_SYMBOL_POINTERS ||
-				   section_type == S_NON_LAZY_SYMBOL_POINTERS){
+				   section_type == S_NON_LAZY_SYMBOL_POINTERS ||
+				   section_type == S_THREAD_LOCAL_VARIABLE_POINTERS){
 				    s[j].flags = S_REGULAR;
 				    s[j].reserved1 = 0;
 				    s[j].reserved2 = 0;
@@ -1275,7 +1309,8 @@ struct object *object)
 				   section_type == S_LAZY_SYMBOL_POINTERS ||
 				   section_type ==
 						S_LAZY_DYLIB_SYMBOL_POINTERS ||
-				   section_type == S_NON_LAZY_SYMBOL_POINTERS){
+				   section_type == S_NON_LAZY_SYMBOL_POINTERS ||
+				   section_type == S_THREAD_LOCAL_VARIABLE_POINTERS){
 				    s64[j].flags = S_REGULAR;
 				    s64[j].reserved1 = 0;
 				    s64[j].reserved2 = 0;
@@ -1368,12 +1403,15 @@ struct object *object)
 	    flags = object->mh->flags;
 	else
 	    flags = object->mh64->flags;
-	if(strip_all &&
-	   (flags & MH_DYLDLINK) == MH_DYLDLINK &&
-	   object->mh_filetype == MH_EXECUTE)
-	    default_dyld_executable = TRUE;
-	else
+	if((flags & MH_DYLDLINK) == MH_DYLDLINK &&
+	   object->mh_filetype == MH_EXECUTE) {
+	    dyld_executable = TRUE;
+	    default_dyld_executable = strip_all;
+	}
+	else {
+	    dyld_executable = FALSE;
 	    default_dyld_executable = FALSE;
+	}
 	if(Nflag &&
            (mh_flags & MH_DYLDLINK) == MH_DYLDLINK &&
            object->mh_filetype != MH_KEXT_BUNDLE &&
@@ -1533,6 +1571,27 @@ struct object *object)
 		    object->dyld_exports_trie->datasize;
 	    }
 
+	    if(object->function_variants != NULL) {
+		object->input_sym_info_size +=
+		    object->function_variants->datasize;
+		object->output_sym_info_size +=
+		    object->function_variants->datasize;
+		object->output_function_variants_data =
+		    object->object_addr + object->function_variants->dataoff;
+		object->output_function_variants_data_size =
+		    object->function_variants->datasize;
+	    }
+	    if(object->function_variant_fixups != NULL) {
+		object->input_sym_info_size +=
+		    object->function_variant_fixups->datasize;
+		object->output_sym_info_size +=
+		    object->function_variant_fixups->datasize;
+		object->output_function_variant_fixups_data =
+		    object->object_addr + object->function_variant_fixups->dataoff;
+		object->output_function_variant_fixups_data_size =
+		    object->function_variant_fixups->datasize;
+	    }
+
 	    if(object->dyst != NULL){
 #ifndef NMEDIT
 		/*
@@ -1615,6 +1674,32 @@ struct object *object)
 		object->input_sym_info_size +=
 		    object->data_in_code_cmd->datasize;
 	    }
+
+	    if(object->atom_info_cmd != NULL){
+#ifndef NMEDIT
+		/*
+		 * When stripping out the section contents to create a
+		 * dynamic library stub we also remove the atom info.
+		 * And we also remove the atom info if the -no_atom_info
+		 * option is specified
+		 */
+		if(!cflag && !no_atom_info)
+#endif /* !(NMEDIT) */
+		{
+		    object->output_atom_info_data = object->object_addr +
+			object->atom_info_cmd->dataoff;
+		    object->output_atom_info_data_size =
+			object->atom_info_cmd->datasize;
+		    object->output_sym_info_size +=
+			object->atom_info_cmd->datasize;
+		}
+		object->input_sym_info_size +=
+			object->atom_info_cmd->datasize;
+	    }
+#ifndef NMEDIT
+	    if(no_atom_info == TRUE)
+		strip_LC_ATOM_INFO_command(arch, member, object);
+#endif /* !(NMEDIT) */
 
 	    if(object->code_sign_drs_cmd != NULL){
 		object->output_code_sign_drs_info_data = object->object_addr +
@@ -1893,6 +1978,16 @@ struct object *object)
 		    offset += object->dyld_exports_trie->datasize;
 		}
 		
+		if(object->function_variants != NULL){
+		    object->function_variants->dataoff = offset;
+		    offset += object->function_variants->datasize;
+		}
+
+		if(object->function_variant_fixups != NULL){
+		    object->function_variant_fixups->dataoff = offset;
+		    offset += object->function_variant_fixups->datasize;
+		}
+
 		if(object->dyst->nlocrel != 0){
 		    object->output_loc_relocs = (struct relocation_info *)
 			(object->object_addr + object->dyst->locreloff);
@@ -1973,6 +2068,25 @@ struct object *object)
 		    {
 			object->data_in_code_cmd->dataoff = offset;
 			offset += object->data_in_code_cmd->datasize;
+		    }
+		}
+
+		if(object->atom_info_cmd != NULL){
+#ifndef NMEDIT
+		    /*
+		     * When stripping out the section contents to create a
+		     * dynamic library stub the atom info gets
+		     * stripped.
+		     */
+		    if(cflag || no_atom_info){
+			object->atom_info_cmd->dataoff = 0;
+			object->atom_info_cmd->datasize = 0;
+		    }
+		    else
+#endif /* defined(NMEDIT) */
+		    {
+			object->atom_info_cmd->dataoff = offset;
+			offset += object->atom_info_cmd->datasize;
 		    }
 		}
 
@@ -2162,6 +2276,7 @@ struct object *object)
 		}
 
 		if(object->code_sig_cmd != NULL){
+			orgCodeSigOffset = object->code_sig_cmd->dataoff;
 		    offset = rnd32(offset, 16);
 		    object->code_sig_cmd->dataoff = offset;
 		    offset += object->code_sig_cmd->datasize;
@@ -2173,6 +2288,8 @@ struct object *object)
 		    offset += object->func_starts_info_cmd->datasize;
 		if(object->data_in_code_cmd != NULL)
 		    offset += object->data_in_code_cmd->datasize;
+		if(object->atom_info_cmd != NULL)
+		    offset += object->atom_info_cmd->datasize;
 		if(object->link_opt_hint_cmd != NULL)
 		    offset += object->link_opt_hint_cmd->datasize;
 
@@ -2387,6 +2504,13 @@ struct object *object)
 		}
 	    }
 
+	    if(object->atom_info_cmd != NULL){
+		if(cflag) {
+		    object->atom_info_cmd->dataoff = offset;
+		    offset += object->atom_info_cmd->datasize;
+		}
+	    }
+
 	    if(object->code_sign_drs_cmd != NULL){
 		if(cflag) {
 		    object->code_sign_drs_cmd->dataoff = offset;
@@ -2405,6 +2529,8 @@ struct object *object)
 		strip_LC_UUID_commands(arch, member, object);
 	    if(no_split_info == TRUE)
 		strip_LC_SEGMENT_SPLIT_INFO_command(arch, member, object);
+	    if(no_atom_info == TRUE)
+		strip_LC_ATOM_INFO_command(arch, member, object);
 	}
 #endif /* !defined(NMEDIT) */
 
@@ -2423,7 +2549,8 @@ struct object *object)
 	    /* Do this in two steps to avoid 32/64-bit casting problems. */
 	    object->seg_linkedit64->filesize -= object->input_sym_info_size;
 	    object->seg_linkedit64->filesize += object->output_sym_info_size;
-	    object->seg_linkedit64->vmsize = object->seg_linkedit64->filesize;
+	    // make vmsize of LINKEDIT a multiple of the page size
+	    object->seg_linkedit64->vmsize = (object->seg_linkedit64->filesize + 0x3FFF) & (-0x4000);
 	}
 
 	/*
@@ -2598,7 +2725,8 @@ struct object *object)
 			section_type = s->flags & SECTION_TYPE;
 			if(section_type == S_LAZY_SYMBOL_POINTERS ||
 			   section_type == S_LAZY_DYLIB_SYMBOL_POINTERS ||
-			   section_type == S_NON_LAZY_SYMBOL_POINTERS)
+			   section_type == S_NON_LAZY_SYMBOL_POINTERS ||
+			   section_type == S_THREAD_LOCAL_VARIABLE_POINTERS)
 			  stride = 4;
 			else if(section_type == S_SYMBOL_STUBS)
 			    stride = s->reserved2;
@@ -2624,7 +2752,8 @@ struct object *object)
 			section_type = s64->flags & SECTION_TYPE;
 			if(section_type == S_LAZY_SYMBOL_POINTERS ||
 			   section_type == S_LAZY_DYLIB_SYMBOL_POINTERS ||
-			   section_type == S_NON_LAZY_SYMBOL_POINTERS)
+			   section_type == S_NON_LAZY_SYMBOL_POINTERS ||
+			   section_type == S_THREAD_LOCAL_VARIABLE_POINTERS)
 			  stride = 8;
 			else if(section_type == S_SYMBOL_STUBS)
 			    stride = s64->reserved2;
@@ -2650,16 +2779,27 @@ struct object *object)
 	}
 
 	/*
-	 * Issue a warning if object file has a code signature that the
-	 * operation will invalidate it.
+	 * If this file was codesigned either warn or re-sign.
 	 */
-	if(object->code_sig_cmd != NULL
+	if (object->code_sig_cmd != NULL) {
+#ifdef CODEDIRECTORY_SUPPORT
+	    uint32_t datasize = object->code_sig_cmd->datasize;
+	    char* dataaddr = (char*)(object->object_addr + orgCodeSigOffset);
+	    if (codedir_is_linker_signed(dataaddr, datasize)) {
+		codedir_create_object(output_file ? output_file : input_leaf_name,
+				      object->object_addr,
+				      orgCodeSigOffset,
+				      &object->output_codedir);
+	    }
+	    else
+#endif /* CODEDIRECTORY_SUPPORT */
 #ifndef NMEDIT
- 	   && !no_code_signature_warning
+		if (!no_code_signature_warning)
 #endif /* !(NMEDIT) */
-	  )
-	    warning_arch(arch, member, "changes being made to the file will "
-		"invalidate the code signature in: ");
+		    warning_arch(arch, member,
+				 "changes being made to the file will "
+				 "invalidate the code signature in: ");
+	}
 
 	if(nlist_outofsync_with_dyldinfo == TRUE){
 	    if(object->mh != NULL)
@@ -2701,6 +2841,10 @@ struct object *object)
 	       object->data_in_code_cmd->datasize != 0 &&
 	       object->data_in_code_cmd->dataoff < offset)
 	        offset = object->data_in_code_cmd->dataoff;
+	    if(object->atom_info_cmd != NULL &&
+	       object->atom_info_cmd->datasize != 0 &&
+	       object->atom_info_cmd->dataoff < offset)
+		offset = object->atom_info_cmd->dataoff;
 	    if(object->link_opt_hint_cmd != NULL &&
 	       object->link_opt_hint_cmd->datasize != 0 &&
 	       object->link_opt_hint_cmd->dataoff < offset)
@@ -3741,6 +3885,10 @@ enum bool *nlist_outofsync_with_dyldinfo)
 			    sp->seen = TRUE;
 			    len = strlen(strings + n_strx) + 1;
 			    new_ext_strsize += len;
+			    if((n_type & N_TYPE) == N_INDR && n_value != 0 && n_value != n_strx){
+			        len = strlen(strings + n_value) + 1;
+			        new_ext_strsize += len;
+			    }
 			    if((n_type & N_TYPE) == N_UNDF ||
 			       (n_type & N_TYPE) == N_PBUD)
 				new_nundefsym++;
@@ -3787,7 +3935,7 @@ enum bool *nlist_outofsync_with_dyldinfo)
 		    n_desc & REFERENCED_DYNAMICALLY))){
 		    len = strlen(strings + n_strx) + 1;
 		    new_ext_strsize += len;
-		    if((n_type & N_TYPE) == N_INDR){
+		    if((n_type & N_TYPE) == N_INDR && n_value != 0 && n_value != n_strx){
 			len = strlen(strings + n_value) + 1;
 			new_ext_strsize += len;
 		    }
@@ -3812,7 +3960,7 @@ enum bool *nlist_outofsync_with_dyldinfo)
 		     object->mh->filetype == MH_OBJECT))){
 		    len = strlen(strings + n_strx) + 1;
 		    new_ext_strsize += len;
-		    if((n_type & N_TYPE) == N_INDR){
+		    if((n_type & N_TYPE) == N_INDR && n_value != 0 && n_value != n_strx){
 			len = strlen(strings + n_value) + 1;
 			new_ext_strsize += len;
 		    }
@@ -4174,6 +4322,8 @@ enum bool *nlist_outofsync_with_dyldinfo)
 			new_symbols[inew_syms] = symbols[i];
 		    else
 			new_symbols64[inew_syms] = symbols64[i];
+		    enum bool n_strx_is_n_value = (n_strx != 0) && (n_strx == n_value);
+		    char* pstrx = p;
 		    if(n_strx != 0){
 			strcpy(p, strings + n_strx);
 			if(object->mh != NULL)
@@ -4186,14 +4336,18 @@ enum bool *nlist_outofsync_with_dyldinfo)
 		    }
 		    if((n_type & N_TYPE) == N_INDR){
 			if(n_value != 0){
-			    strcpy(p, strings + n_value);
+			    uint32_t off;
+			    if ( n_strx_is_n_value )
+			      off = (uint32_t)(pstrx - new_strings);
+			    else {
+			      strcpy(p, strings + n_value);
+			      off = (uint32_t)(p - new_strings);
+			      p += strlen(p) + 1;
+			    }
 			    if(object->mh != NULL)
-				new_symbols[inew_syms].n_value =
-				    (uint32_t)(p - new_strings);
+				new_symbols[inew_syms].n_value = off;
 			    else
-				new_symbols64[inew_syms].n_value =
-				    (uint32_t)(p - new_strings);
-			    p += strlen(p) + 1;
+				new_symbols64[inew_syms].n_value = off;
 			}
 		    }
 		    inew_syms++;
@@ -4505,25 +4659,40 @@ enum bool *nlist_outofsync_with_dyldinfo)
 	/*
 	 * Update the export trie if it has one but only call the the
 	 * prune_trie() routine when we are removing global symbols as is
-	 * done with default stripping of a dyld executable or with the -s
-	 * or -R options.  If we are stripping nlist with the -N flag we must
-	 * leave the export trie as is.
+	 * done by default on executables, unless any of -S/-x/-X/-T flags are specified without any
+	 * options that specifically remove global symbols.
+	 * If we are stripping nlist with the -N flag we must leave the export trie
+	 * as is.
 	 */
-	if(!strip_all_nlists && object->dyld_info != NULL &&
-	   object->dyld_info->export_size != 0 &&
-	   (default_dyld_executable || sfile != NULL || Rfile != NULL)){
-	    const char *error_string;
-	    uint32_t trie_new_size;
+	if(!strip_all_nlists &&
+          (( dyld_executable && !(Sflag || xflag || Xflag || Tflag) ) || Rfile || sfile)){
+		if (object->dyld_info != NULL && object->dyld_info->export_size != 0) {
+			const char *error_string;
+			uint32_t trie_new_size;
 
-	    error_string = prune_trie((uint8_t *)(object->object_addr +
-						 object->dyld_info->export_off),
-		       		      object->dyld_info->export_size,
-		       		      prune,
-				      &trie_new_size);
-	    if(error_string != NULL){
-		error_arch(arch, member, "%s", error_string);
-		return(FALSE);
-	    }
+			error_string = prune_trie((uint8_t *)(object->object_addr + object->dyld_info->export_off),
+					object->dyld_info->export_size,
+					prune,
+					&trie_new_size);
+			if(error_string != NULL){
+				error_arch(arch, member, "LC_DYLD_INFO exports trie prune: %s in: ", error_string);
+				return(FALSE);
+			}
+		}
+
+		if (object->dyld_exports_trie != NULL && object->dyld_exports_trie->datasize != 0) {
+			const char *error_string;
+			uint32_t trie_new_size;
+
+			error_string = prune_trie((uint8_t *)(object->object_addr + object->dyld_exports_trie->dataoff),
+					object->dyld_exports_trie->datasize,
+					prune,
+					&trie_new_size);
+			if(error_string != NULL){
+				error_arch(arch, member, "LC_DYLD_EXPORTS_TRIE trie prune: %s in: ", error_string);
+				return(FALSE);
+			}
+		}
 	}
 #endif /* TRIE_SUPPORT */
 
@@ -4918,6 +5087,82 @@ struct object *object)
 	memcpy(object->load_commands, new_load_commands, sizeofcmds);
 	if(mh_sizeofcmds > sizeofcmds){
 		memset((char *)object->load_commands + sizeofcmds, '\0', 
+			   (mh_sizeofcmds - sizeofcmds));
+	}
+	ncmds -= 1;
+        if(object->mh != NULL) {
+            object->mh->sizeofcmds = sizeofcmds;
+            object->mh->ncmds = ncmds;
+        } else {
+            object->mh64->sizeofcmds = sizeofcmds;
+            object->mh64->ncmds = ncmds;
+        }
+	free(new_load_commands);
+
+	/* reset the pointers into the load commands */
+	reset_load_command_pointers(object);
+}
+
+/*
+ * strip_LC_ATOM_INFO_command() is called when -no_atom_info is
+ * specified to the LC_ATOM_INFO load command from the object's load
+ * commands.
+ */
+static
+void
+strip_LC_ATOM_INFO_command(
+struct arch *arch,
+struct member *member,
+struct object *object)
+{
+    uint32_t i, ncmds, mh_sizeofcmds, sizeofcmds;
+    struct load_command *lc1, *lc2, *new_load_commands;
+
+	/*
+	 * See if there is a LC_ATOM_INFO load command.
+	 * if no LC_ATOM_INFO load command just return.
+	 */
+	if(object->atom_info_cmd == NULL)
+	    return;
+
+	/*
+	 * Allocate space for the new load commands as zero it out so any holes
+	 * will be zero bytes.
+	 */
+        if(object->mh != NULL){
+            ncmds = object->mh->ncmds;
+	    mh_sizeofcmds = object->mh->sizeofcmds;
+	}
+	else{
+            ncmds = object->mh64->ncmds;
+	    mh_sizeofcmds = object->mh64->sizeofcmds;
+	}
+	new_load_commands = allocate(mh_sizeofcmds);
+	memset(new_load_commands, '\0', mh_sizeofcmds);
+
+	/*
+	 * Copy all the load commands except the LC_ATOM_INFO load
+	 * command into the allocated space for the new load commands.
+	 */
+	lc1 = object->load_commands;
+	lc2 = new_load_commands;
+	sizeofcmds = 0;
+	for(i = 0; i < ncmds; i++){
+	    if(lc1->cmd != LC_ATOM_INFO){
+		memcpy(lc2, lc1, lc1->cmdsize);
+		sizeofcmds += lc2->cmdsize;
+		lc2 = (struct load_command *)((char *)lc2 + lc2->cmdsize);
+	    }
+	    lc1 = (struct load_command *)((char *)lc1 + lc1->cmdsize);
+	}
+
+	/*
+	 * Finally copy the updated load commands over the existing load
+	 * commands.
+	 */
+	memcpy(object->load_commands, new_load_commands, sizeofcmds);
+	if(mh_sizeofcmds > sizeofcmds){
+		memset((char *)object->load_commands + sizeofcmds, '\0',
 			   (mh_sizeofcmds - sizeofcmds));
 	}
 	ncmds -= 1;
