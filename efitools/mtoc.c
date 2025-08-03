@@ -2,14 +2,14 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,7 +17,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 #define __eip eip
@@ -242,7 +242,7 @@ static void create_base_reloc(
     struct arch *arch);
 static void gather_base_reloc_info(
     uint32_t addr,
-    struct relocation_info *relocs, 
+    struct relocation_info *relocs,
     uint32_t nreloc,
     cpu_type_t cpu_type,
     uint32_t length,
@@ -547,7 +547,7 @@ uint32_t narchs)
 		if(entry_point == NULL &&
 		   archs->object->mh64->filetype == MH_DYLIB)
 		    fatal("input file: %s is a MH_DYLIB file type, so entry "
-			  "point option, -e name, must be specified", 
+			  "point option, -e name, must be specified",
 			  archs->file_name);
 	    }
 	    else if(archs->object->mh64->filetype == MH_PRELOAD ||
@@ -613,7 +613,7 @@ struct arch *arch)
 
 	/*
 	 * Determine the number of sections in the pecoff output file.
-	 * 
+	 *
 #ifdef HACK_TO_MATCH_TEST_CASE
 	 *
 	 * The hack implementation of this routine is done to match the
@@ -1069,9 +1069,9 @@ struct arch *arch)
 
 	/*
 	 * Determine the number of sections in the pecoff output file.
-	 * 
+	 *
 #ifdef HACK_TO_MATCH_TEST_CASE
-	 * 
+	 *
 	 * The hack implementation of this routine is done to match the
 	 * current ld_efi(1) script that uses objcopy(1) to make the pecoff
 	 * file.  So for 64-bit files the contents of the Mach-O sections get
@@ -1461,7 +1461,7 @@ struct ofile *ofile)
 	if(ofile->mh64 != NULL)
 	    header_size += 0x88;
 #endif
-	/* 
+	/*
 	 * If the lowest section virtual address is greater than the header
 	 * size, pad the header up to the virtual address.  This modification
 	 * will make the file offset and virtual address equal, and fixes
@@ -1470,7 +1470,7 @@ struct ofile *ofile)
 	least_vaddr = 0xffffffff;
 	for(i = 0; i < nscns; i++){
 	    if(scnhdrs[i].s_vaddr < least_vaddr)
-		least_vaddr = scnhdrs[i].s_vaddr;      
+		least_vaddr = scnhdrs[i].s_vaddr;
 	}
 	if(least_vaddr > header_size)
 	    header_size = least_vaddr;
@@ -1599,8 +1599,8 @@ struct ofile *ofile)
 	    aouthdr.magic = PE32MAGIC;
 	    aouthdr.vstamp = VSTAMP;
 
-      /* 
-       * EFI does not use t, d, or b size. 
+      /*
+       * EFI does not use t, d, or b size.
        * EFI uses SizeOfImage to errorcheck vaddrs in the image
        */
 	    aouthdr.tsize = 0;
@@ -1638,8 +1638,8 @@ struct ofile *ofile)
 	    aouthdr.MajorSubsystemVersion = 0;
 	    aouthdr.MinorSubsystemVersion = 0;
 	    aouthdr.Win32VersionValue = 0;
-				  
-				  
+
+
 	    aouthdr.SizeOfHeaders = header_size;
 	    aouthdr.CheckSum = 0;
 	    aouthdr.Subsystem = Subsystem;
@@ -1665,17 +1665,17 @@ struct ofile *ofile)
 	    aouthdr64.magic = PE32PMAGIC;
 	    aouthdr64.vstamp = VSTAMP;
 
-      /* 
-       * EFI does not use t, d, or b size. 
+      /*
+       * EFI does not use t, d, or b size.
        * EFI uses SizeOfImage to errorcheck vaddrs in the image
        */
 	    aouthdr64.tsize = 0;
 	    aouthdr64.dsize = 0;
 	    aouthdr64.bsize = 0;
-	    
+
 	    aouthdr64.SizeOfImage = rnd32(header_size, section_alignment);
 	    for(i = 0; i < nscns; i++){
-	        aouthdr64.SizeOfImage += rnd(scnhdrs[i].s_vsize, section_alignment); 
+	        aouthdr64.SizeOfImage += rnd(scnhdrs[i].s_vsize, section_alignment);
 	    }
 #ifdef HACK_TO_MATCH_TEST_CASE
 	    /* with the IMAGE_SCN_CNT_CODE flag set on all sections this is
@@ -1715,8 +1715,8 @@ struct ofile *ofile)
 	    aouthdr64.MajorSubsystemVersion = 0;
 	    aouthdr64.MinorSubsystemVersion = 0;
 	    aouthdr64.Win32VersionValue = 0;
-				    
-				    
+
+
 #ifdef HACK_TO_MATCH_TEST_CASE
 	    /* this is a hack as it seams that the minimum size is 0x10000 */
 	    if(aouthdr64.SizeOfImage < 0x10000)
@@ -1812,7 +1812,7 @@ char *out)
 	 * Now copy in the section contents.  Note the base relocations
 	 * (the contents of the .reloc section) has already been swapped if
 	 * that was needed.
-	 */ 
+	 */
 	for(i = 0; i < nscns; i++){
 	    if((scnhdrs[i].s_flags & IMAGE_SCN_CNT_UNINITIALIZED_DATA) == 0){
 		memcpy(buf + scnhdrs[i].s_scnptr,
@@ -2364,7 +2364,7 @@ struct arch *arch)
 		       ((sg64->initprot & VM_PROT_WRITE) != 0)) {
 		      first_addr = sg64->vmaddr;
 		    }
-		} else { 
+		} else {
 		if(first_addr == 0)
 		    first_addr = sg64->vmaddr;
 		}
@@ -2441,7 +2441,7 @@ static
 void
 gather_base_reloc_info(
 uint32_t addr,
-struct relocation_info *relocs, 
+struct relocation_info *relocs,
 uint32_t nreloc,
 cpu_type_t cpu_type,
 uint32_t length,
@@ -2498,7 +2498,7 @@ uint32_t type)
 {
     static int max = 0;
     struct base_reloc *new_base_relocs;
-    
+
 	if(!max){
 	    max = 128;
 	    base_relocs = (struct base_reloc *)
@@ -2545,7 +2545,7 @@ void)
     struct base_relocation_block_header *h;
     struct base_relocation_entry *b;
     uint32_t offset;
-	
+
 	blockcnt = 0;
 
 	/*
@@ -2562,10 +2562,10 @@ void)
 	 */
 	if(nbase_reloc == 0)
 	    return;
-	
+
 	qsort(base_relocs, nbase_reloc, sizeof(struct base_reloc),
 	      (int (*)(const void *, const void *))cmp_base_relocs);
-	
+
 	/*
 	 * The size of the base relocation tables must be a multiple of 4 bytes.
 	 * so we may need to add one relocation entry as padding.  We make this
@@ -2576,8 +2576,8 @@ void)
 	size = sizeof(struct base_relocation_block_header) +
 	       (nbase_reloc + 1) * sizeof(struct base_relocation_entry);
 	fb = malloc(size);
-	
-	
+
+
 	entries = 0;
 	base = base_relocs[0].addr & ~BLOCK_MASK;
 	h = (struct base_relocation_block_header *)fb;
@@ -2616,7 +2616,7 @@ void)
 	    b[entries].offset = offset;
 	    entries++;
 	}
-	
+
 	/* add padding if needed */
 	if((entries % 2) != 0){
 	    b[entries].type = IMAGE_REL_BASED_ABSOLUTE;
