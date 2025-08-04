@@ -14,8 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: xcodebuild -scheme mtoc -jobs 1 -arch x86_64 -arch arm64 -configuration Debug CONFIGURATION_BUILD_DIR=build/Debug
-      - run: xcodebuild -scheme mtoc -jobs 1 -arch x86_64 -arch arm64 -configuration Release CONFIGURATION_BUILD_DIR=build/Release
+      - run: xcodebuild -scheme mtoc -jobs 1 -configuration Debug CONFIGURATION_BUILD_DIR=build/Debug ARCHS='x86_64 arm64' ONLY_ACTIVE_ARCH=NO
+      - run: xcodebuild -scheme mtoc -jobs 1 -configuration Release CONFIGURATION_BUILD_DIR=build/Release ARCHS='x86_64 arm64' ONLY_ACTIVE_ARCH=NO
       - run: cd build/Debug && zip -qry ocmtoc-$(./mtoc --version)-DEBUG.zip mtoc
       - run: cd build/Release && zip -qry ocmtoc-$(./mtoc --version)-RELEASE.zip mtoc
 
