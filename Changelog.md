@@ -4,6 +4,7 @@ ocmtoc changelog
 #### v1.0.4
 - Rebased to cctools 1024.3
 - Added `__SBAT` support, thx @dakanji
+- Added `--fullversion` argument, thx @dakanji
 
 #### v1.0.3
 - Verify `__RO_RELOCS` protection level

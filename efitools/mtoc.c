@@ -23,6 +23,8 @@
 #define __eip eip
 #define __rip rip
 
+#define VERSION "1.0.4"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -415,7 +417,11 @@ char **envp)
 	    	require_read_only_relocs = TRUE;
 	    }
 	    else if(strcmp(argv[i], "--version") == 0){
-	    	printf("1.0.4\n");
+	    	puts(VERSION);
+	    	exit(0);
+	    }
+	    else if(strcmp(argv[i], "--fullversion") == 0){
+	    	puts("Acidanthera ocmtoc " VERSION);
 	    	exit(0);
 	    }
 	    else if(input == NULL)
