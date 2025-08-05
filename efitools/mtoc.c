@@ -417,12 +417,12 @@ char **envp)
 	    	require_read_only_relocs = TRUE;
 	    }
 	    else if(strcmp(argv[i], "--version") == 0){
-	    	printf("%s\n", VERSION);
+	    	puts(VERSION);
 	    	exit(0);
 	    }
 	    else if(strcmp(argv[i], "--fullversion") == 0){
-            printf("Acidanthera ocmtoc %s\n", VERSION);
-            exit(0);
+	    	puts("Acidanthera ocmtoc " VERSION);
+	    	exit(0);
 	    }
 	    else if(input == NULL)
 		input = argv[i];
